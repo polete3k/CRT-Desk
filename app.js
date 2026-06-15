@@ -206,6 +206,7 @@ function render(){
     performance:renderPerformance,
     capital:renderCapital,
     accounts:renderAccounts,
+    calendar:renderCalendar,
     journal:renderJournal
   })[CURRENT_TAB](v, T);
 }
@@ -617,6 +618,121 @@ function renderAccounts(v, T){
 }
 
 /* ============================================================
+   CALENDAR
+   ============================================================ */
+let CAL_MONTH = new Date().getMonth();
+let CAL_YEAR = new Date().getFullYear();
+
+function calShift(delta){
+  CAL_MONTH += delta;
+  if(CAL_MONTH<0){ CAL_MONTH=11; CAL_YEAR--; }
+  if(CAL_MONTH>11){ CAL_MONTH=0; CAL_YEAR++; }
+  render();
+}
+
+function renderCalendar(v, T){
+  const monthName = new Date(CAL_YEAR,CAL_MONTH,1).toLocaleDateString('es-ES',{month:'long',year:'numeric'});
+  const first = new Date(CAL_YEAR,CAL_MONTH,1);
+  const startDow = (first.getDay()+6)%7; // lunes=0
+  const daysInMonth = new Date(CAL_YEAR,CAL_MONTH+1,0).getDate();
+  const todayStr = todayISO();
+
+  // agrupar trades por día del mes visible (parseo local explícito, sin desfase TZ)
+  const byDay={};
+  T.forEach(t=>{
+    const [yy,mm,dd]=t.date.split('-').map(Number);
+    if(yy===CAL_YEAR && (mm-1)===CAL_MONTH){
+      const day=dd;
+      byDay[day]=byDay[day]||{pnl:0,n:0,dirty:false,r:0};
+      byDay[day].pnl+=(t.pnl||0);
+      byDay[day].r+=(t.realizedR||0);
+      byDay[day].n++;
+      if((t.flags||[]).some(f=>f!=='clean')) byDay[day].dirty=true;
+    }
+  });
+
+  // stats del mes
+  const monthDays=Object.values(byDay);
+  const monthPnl=monthDays.reduce((s,d)=>s+d.pnl,0);
+  const greenDays=monthDays.filter(d=>d.pnl>0).length;
+  const redDays=monthDays.filter(d=>d.pnl<0).length;
+
+  const dows=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+  let cells='';
+  for(let i=0;i<startDow;i++) cells+=`<div class="cal-cell empty"></div>`;
+  for(let day=1;day<=daysInMonth;day++){
+    const d=byDay[day];
+    const dateStr=`${CAL_YEAR}-${String(CAL_MONTH+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const isToday=dateStr===todayStr;
+    if(d){
+      const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
+      cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
+        <div class="daynum">${day}</div>
+        ${d.dirty?'<div class="flag-dot" title="día con error"></div>':''}
+        <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
+        <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
+      </div>`;
+    } else {
+      cells+=`<div class="cal-cell ${isToday?'today':''}"><div class="daynum">${day}</div></div>`;
+    }
+  }
+
+  v.innerHTML=`
+    <div class="cal-head">
+      <button class="btn ghost sm icon" onclick="calShift(-1)">←</button>
+      <div class="month">${monthName}</div>
+      <button class="btn ghost sm icon" onclick="calShift(1)">→</button>
+    </div>
+    <div class="cal-grid">
+      ${dows.map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+      ${cells}
+    </div>
+    <div class="cal-month-stats">
+      <div class="s"><span class="k">P&L del mes</span><span class="v ${cls(monthPnl)}">${fmt$(monthPnl)}</span></div>
+      <div class="s"><span class="k">Días verdes</span><span class="v pos">${greenDays}</span></div>
+      <div class="s"><span class="k">Días rojos</span><span class="v neg">${redDays}</span></div>
+      <div class="s"><span class="k">Días operados</span><span class="v">${monthDays.length}</span></div>
+    </div>
+    <div class="hint" style="margin-top:14px">Toca un día para ver el detalle de sus trades. El punto rojo marca días con algún error de ejecución.</div>
+  `;
+}
+
+function calDayDetail(dateStr){
+  const dayTrades=DB.trades.filter(t=>t.date===dateStr).sort((a,b)=>a.id<b.id?-1:1);
+  const dPnl=totalPnl(dayTrades), dR=totalR(dayTrades);
+  const human=new Date(dateStr).toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'});
+  $('#modalBg').innerHTML=`<div class="modal">
+    <h2 style="text-transform:capitalize">${human} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="grid g-3" style="gap:10px;margin-bottom:16px">
+      <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">P&L</div><div class="big ${cls(dPnl)}">${fmt$(dPnl)}</div></div>
+      <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R TOTAL</div><div class="big ${cls(dR)}">${fmtR(dR)}</div></div>
+      <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TRADES</div><div class="big">${dayTrades.length}</div></div>
+    </div>
+    ${dayTrades.map(t=>{
+      const errs=(t.flags||[]).filter(f=>f!=='clean');
+      return `<div class="card" style="padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><b>${t.symbol}</b> <span class="hint">${t.setup} · ${t.session}</span></div>
+          <div style="font-family:var(--mono);font-weight:700" class="${cls(t.realizedR)}">${fmtR(t.realizedR)} · ${fmt$(t.pnl)}</div>
+        </div>
+        ${errs.length?`<div style="margin-top:6px">${errs.map(f=>`<span class="tag bad" style="margin:1px">${FLAG_LABELS[f]||f}</span>`).join('')}</div>`:''}
+        ${t.note?`<div class="hint" style="margin-top:6px">${t.note}</div>`:''}
+        ${(t.images&&t.images.length)?`<div class="thumb-row">${t.images.map(img=>`<img class="thumb" src="${img}" onclick="lightbox('${img}')">`).join('')}</div>`:''}
+      </div>`;
+    }).join('')||'<p class="hint">Sin trades este día.</p>'}
+    <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Cerrar</button></div>
+  </div>`;
+  $('#modalBg').classList.add('show');
+}
+
+function lightbox(src){
+  let lb=$('#lightbox');
+  if(!lb){ lb=document.createElement('div'); lb.id='lightbox'; lb.className='lightbox'; lb.onclick=()=>lb.classList.remove('show'); document.body.appendChild(lb); }
+  lb.innerHTML=`<img src="${src}">`;
+  lb.classList.add('show');
+}
+
+/* ============================================================
    JOURNAL
    ============================================================ */
 let JOURNAL_FILTER = 'all';
@@ -636,7 +752,7 @@ function renderJournal(v, T){
         const errs=(t.flags||[]).filter(f=>f!=='clean');
         return `<tr>
           <td>${t.date}</td>
-          <td>${t.symbol||'—'}</td>
+          <td>${t.symbol||'—'}${(t.images&&t.images.length)?` <span title="${t.images.length} imagen(es)" style="opacity:.6">📎</span>`:''}</td>
           <td style="font-family:var(--sans)">${t.setup||'—'}</td>
           <td>${t.session||'—'}</td>
           <td>${fmt(t.plannedR,1)}</td>
@@ -738,6 +854,11 @@ function tradeModal(t){
       </div>
     </div>
     <div class="field"><label>Nota</label><textarea id="f_note" rows="2" placeholder="Contexto, qué viste, qué harías distinto...">${e.note||''}</textarea></div>
+    <div class="field"><label>Capturas (gráficos, entradas...)</label>
+      <div class="img-drop" id="f_imgdrop" onclick="document.getElementById('f_imgInput').click()">📎 Toca para adjuntar imágenes (se comprimen solas)</div>
+      <input type="file" id="f_imgInput" accept="image/*" multiple style="display:none" onchange="handleTradeImages(event)">
+      <div class="thumb-row" id="f_thumbs"></div>
+    </div>
     <div class="modal-actions">
       ${t?`<button class="btn danger" onclick="deleteTrade('${t.id}')">Eliminar</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
@@ -746,7 +867,59 @@ function tradeModal(t){
   </div>`;
   $('#modalBg').classList.add('show');
   $('#modalBg')._flags=[...flags];
+  $('#modalBg')._images=[...(e.images||[])];
+  renderTradeThumbs();
 }
+
+// Comprime una imagen a max 1000px lado mayor, JPEG 0.7 (~100-200KB)
+function compressImage(file){
+  return new Promise((resolve)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        const max=1000;
+        let {width,height}=img;
+        if(width>max||height>max){
+          if(width>height){ height=height*max/width; width=max; }
+          else { width=width*max/height; height=max; }
+        }
+        const canvas=document.createElement('canvas');
+        canvas.width=width; canvas.height=height;
+        canvas.getContext('2d').drawImage(img,0,0,width,height);
+        resolve(canvas.toDataURL('image/jpeg',0.7));
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+async function handleTradeImages(ev){
+  const files=[...ev.target.files];
+  for(const f of files){
+    if(!f.type.startsWith('image/')) continue;
+    const compressed=await compressImage(f);
+    $('#modalBg')._images.push(compressed);
+  }
+  renderTradeThumbs();
+  ev.target.value='';
+}
+function renderTradeThumbs(){
+  const imgs=$('#modalBg')._images||[];
+  const c=$('#f_thumbs');
+  if(!c) return;
+  c.innerHTML=imgs.map((src,i)=>`<div style="position:relative">
+    <img class="thumb" src="${src}" onclick="lightbox('${'IMG'+i}')">
+    <button onclick="removeTradeImage(${i})" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;cursor:pointer;line-height:1">×</button>
+  </div>`).join('');
+  // lightbox por índice (evita meter base64 gigante en onclick)
+  $$('#f_thumbs .thumb').forEach((el,i)=>{ el.onclick=()=>lightbox(imgs[i]); });
+}
+function removeTradeImage(i){
+  $('#modalBg')._images.splice(i,1);
+  renderTradeThumbs();
+}
+function _modalImagesEnd(){}
 function toggleFlag(k){
   const fl=$('#modalBg')._flags;
   if(k==='clean'){ $('#modalBg')._flags=['clean']; }
@@ -777,11 +950,20 @@ function saveTrade(id){
     pnl:parseFloat($('#f_pnl').value)|| ((isNaN(realizedR)?0:realizedR)*(parseFloat($('#f_riskUSD').value)||0)),
     result:$('#f_result').value,
     flags:[...flags],
-    note:$('#f_note').value.trim()
+    note:$('#f_note').value.trim(),
+    images:[...($('#modalBg')._images||[])]
   };
   if(id){ const i=DB.trades.findIndex(x=>x.id===id); DB.trades[i]=t; }
   else DB.trades.push(t);
-  save(); closeModal(); render(); toast(id?'Trade actualizado':'Trade guardado');
+  try{
+    save();
+  }catch(err){
+    // localStorage lleno (probablemente por imágenes)
+    toast('⚠ Almacenamiento lleno. Quita alguna imagen o exporta y limpia datos antiguos.');
+    if(!id) DB.trades.pop();
+    return;
+  }
+  closeModal(); render(); toast(id?'Trade actualizado':'Trade guardado');
 }
 function deleteTrade(id){
   if(!confirm('¿Eliminar este trade?'))return;
