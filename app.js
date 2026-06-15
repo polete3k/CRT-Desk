@@ -391,6 +391,31 @@ function renderDiscipline(v, T){
           <td>${fmt(s.n/T.length*100,0)}%</td>
         </tr>`).join('')}</tbody></table></div>`:`<p class="hint">Ningún error registrado. 🎯</p>`}
     </div>
+
+    ${(()=>{
+      const withPlan=T.filter(t=>t.planChecked!=null);
+      if(withPlan.length<3) return '';
+      const full=withPlan.filter(t=>(t.planChecked||[]).length===PLAN_CHECKLIST.length);
+      const partial=withPlan.filter(t=>(t.planChecked||[]).length<PLAN_CHECKLIST.length);
+      if(!full.length||!partial.length) return '';
+      const diff=expectancy(full)-expectancy(partial);
+      return `<div class="card" style="margin-top:14px">
+        <h3>Adherencia al plan</h3>
+        <div class="grid g-2">
+          <div class="calc-out">
+            <div class="label" style="color:var(--green);font-size:11px;font-weight:600;margin-bottom:6px">PLAN COMPLETO (${full.length})</div>
+            <div class="big pos">${fmtR(expectancy(full))}</div>
+            <div class="hint" style="margin-top:6px">WR ${fmt(winrate(full),0)}%</div>
+          </div>
+          <div class="calc-out">
+            <div class="label" style="color:var(--amber);font-size:11px;font-weight:600;margin-bottom:6px">PLAN INCOMPLETO (${partial.length})</div>
+            <div class="big ${cls(expectancy(partial))}">${fmtR(expectancy(partial))}</div>
+            <div class="hint" style="margin-top:6px">WR ${fmt(winrate(partial),0)}%</div>
+          </div>
+        </div>
+        ${diff>0?`<div class="insight warn" style="margin-top:14px">Cuando cumples todas las reglas de tu plan ganas <b>${fmtR(diff)} más</b> por trade que cuando te saltas alguna. Tu plan funciona — respétalo.</div>`:`<div class="insight" style="margin-top:14px">Aún no hay diferencia clara entre cumplir todo el plan o no. Sigue registrando para que el dato sea fiable.</div>`}
+      </div>`;
+    })()}
   `;
 }
 
@@ -812,8 +837,18 @@ const FLAG_LABELS={
   moved_stop:'Moví el stop',
   revenge:'Revenge trade',
   no_setup:'Sin setup válido',
-  oversized:'Sobre-dimensioné'
+  oversized:'Sobre-dimensioné',
+  bad_analysis:'Error de análisis'
 };
+// Plan de trading — checklist que aparece al registrar (en catalán, como lo definió Pol)
+const PLAN_CHECKLIST=[
+  'Si és NY, plantejar abans els possibles escenaris',
+  'SL on s\u2019invalidi el trade',
+  'Tenir BIAS a favor (12h-4h)',
+  'No tenir rang contrari a prop',
+  'Tendència a favor',
+  'No Inside candle'
+];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
 const SESSIONS=['Londres','NY','Asia','Overlap'];
@@ -824,8 +859,19 @@ function editTrade(id){ tradeModal(DB.trades.find(t=>t.id===id)); }
 function tradeModal(t){
   const e=t||{};
   const flags=e.flags||['clean'];
+  const planChecked=e.planChecked||[];
   $('#modalBg').innerHTML=`<div class="modal">
     <h2>${t?'Editar trade':'Nuevo trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="plan-box">
+      <div class="plan-title">📋 Pla de trading — checklist abans d'entrar</div>
+      <div id="f_plan">
+        ${PLAN_CHECKLIST.map((rule,i)=>`<label class="plan-item">
+          <input type="checkbox" data-plan="${i}" ${planChecked.includes(i)?'checked':''}>
+          <span>${rule}</span>
+        </label>`).join('')}
+      </div>
+      <div class="plan-count" id="f_planCount"></div>
+    </div>
     <div class="field-row">
       <div class="field"><label>Fecha</label><input type="date" id="f_date" value="${e.date||todayISO()}"></div>
       <div class="field"><label>Símbolo</label><select id="f_symbol">${SYMBOLS.map(s=>`<option ${(e.symbol||'MNQ')===s?'selected':''}>${s}</option>`).join('')}</select></div>
@@ -869,6 +915,15 @@ function tradeModal(t){
   $('#modalBg')._flags=[...flags];
   $('#modalBg')._images=[...(e.images||[])];
   renderTradeThumbs();
+  // contador de checklist del plan
+  const updatePlanCount=()=>{
+    const checked=$$('#f_plan input[type=checkbox]').filter(c=>c.checked).length;
+    const total=PLAN_CHECKLIST.length;
+    const el=$('#f_planCount');
+    if(el) el.innerHTML=`<span class="${checked===total?'pos':checked>=total-1?'':'neg'}">${checked}/${total} reglas cumplidas</span>${checked<total?' — revisa antes de entrar':' ✓ setup A+'}`;
+  };
+  $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',updatePlanCount));
+  updatePlanCount();
 }
 
 // Comprime una imagen a max 1000px lado mayor, JPEG 0.7 (~100-200KB)
@@ -951,7 +1006,8 @@ function saveTrade(id){
     result:$('#f_result').value,
     flags:[...flags],
     note:$('#f_note').value.trim(),
-    images:[...($('#modalBg')._images||[])]
+    images:[...($('#modalBg')._images||[])],
+    planChecked:$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan)
   };
   if(id){ const i=DB.trades.findIndex(x=>x.id===id); DB.trades[i]=t; }
   else DB.trades.push(t);
