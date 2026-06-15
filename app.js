@@ -278,7 +278,7 @@ function renderOverview(v, T){
     <div class="grid g-2">
       <div class="card">
         <h3>Curva de equity (R)</h3>
-        <canvas id="equityChart" height="200"></canvas>
+        <div style="position:relative;height:220px"><canvas id="equityChart"></canvas></div>
       </div>
       <div class="card">
         <h3>Rendimiento por setup</h3>
@@ -415,7 +415,7 @@ function renderPerformance(v, T){
     </div>
     <div class="card">
       <h3>Distribución de R por trade</h3>
-      <canvas id="distChart" height="160"></canvas>
+      <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
     </div>
   `;
   drawDistribution('distChart', T);
@@ -698,7 +698,8 @@ const FLAG_LABELS={
   no_setup:'Sin setup válido',
   oversized:'Sobre-dimensioné'
 };
-const SETUPS=['Setup A','Setup C - Continuación','Otro'];
+const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
+const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
 const SESSIONS=['Londres','NY','Asia','Overlap'];
 
 function openTradeModal(){ tradeModal(); }
@@ -711,7 +712,7 @@ function tradeModal(t){
     <h2>${t?'Editar trade':'Nuevo trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
     <div class="field-row">
       <div class="field"><label>Fecha</label><input type="date" id="f_date" value="${e.date||todayISO()}"></div>
-      <div class="field"><label>Símbolo</label><input id="f_symbol" value="${e.symbol||'EURAUD'}" placeholder="EURAUD, NQ, ES..."></div>
+      <div class="field"><label>Símbolo</label><select id="f_symbol">${SYMBOLS.map(s=>`<option ${(e.symbol||'MNQ')===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field-row">
       <div class="field"><label>Setup</label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
