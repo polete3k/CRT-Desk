@@ -891,7 +891,10 @@ function init(){
   $('#exportBtn').onclick=exportData;
   $('#importBtn').onclick=()=>$('#fileInput').click();
   $('#fileInput').onchange=e=>{ if(e.target.files[0]) importData(e.target.files[0]); };
-  $('#modalBg').addEventListener('click',e=>{ if(e.target.id==='modalBg') closeModal(); });
+  // Cerrar solo si el clic empieza Y termina en el fondo (no al arrastrar desde un input)
+  let _downOnBg=false;
+  $('#modalBg').addEventListener('mousedown',e=>{ _downOnBg = (e.target.id==='modalBg'); });
+  $('#modalBg').addEventListener('mouseup',e=>{ if(_downOnBg && e.target.id==='modalBg') closeModal(); _downOnBg=false; });
   render();
 }
 init();
