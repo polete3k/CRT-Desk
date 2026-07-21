@@ -139,8 +139,23 @@ function toast(msg){
 //  pnl ($ real), riskUSD ($ arriesgado),
 //  result win|loss|be, flags:[], note}
 
+// Filtro global de fase: 'all' | 'eval' | 'funded'
+let PHASE_FILTER = 'all';
+
+// Resuelve la fase de un trade a partir de la cuenta asignada
+function tradePhase(t){
+  if(!t.account) return null;
+  const acc = DB.accounts.find(a=>a.name===t.account);
+  if(!acc) return null;
+  return acc.phase==='Funded' ? 'funded' : 'eval';
+}
+
 function tradesFiltered(filterFn){
-  return DB.trades.filter(filterFn||(()=>true)).sort((a,b)=> a.date<b.date?1:-1);
+  let arr = DB.trades;
+  if(PHASE_FILTER!=='all'){
+    arr = arr.filter(t=> tradePhase(t)===PHASE_FILTER);
+  }
+  return arr.filter(filterFn||(()=>true)).sort((a,b)=> a.date<b.date?1:-1);
 }
 
 function expectancy(trades){
@@ -299,8 +314,11 @@ function render(){
   destroyCharts();
   const v = $('#view');
   const T = tradesFiltered();
+  // pestañas donde el filtro eval/funded tiene sentido
+  const metricTabs=['overview','discipline','performance'];
+  const showFilter = metricTabs.includes(CURRENT_TAB);
   if(CURRENT_TAB!=='accounts' && CURRENT_TAB!=='capital' && !T.length){
-    v.innerHTML = emptyState();
+    v.innerHTML = (showFilter?phaseFilterBar():'') + emptyState();
     return;
   }
   ({
@@ -312,7 +330,22 @@ function render(){
     calendar:renderCalendar,
     journal:renderJournal
   })[CURRENT_TAB](v, T);
+  // prepend filter bar en pestañas de métricas
+  if(showFilter){
+    v.insertAdjacentHTML('afterbegin', phaseFilterBar());
+  }
 }
+
+function phaseFilterBar(){
+  const opts=[['all','Todo'],['eval','Eval'],['funded','Funded']];
+  // contar trades por fase para mostrar
+  const counts={all:DB.trades.length, eval:0, funded:0};
+  DB.trades.forEach(t=>{ const p=tradePhase(t); if(p)counts[p]++; });
+  return `<div class="phase-filter">
+    ${opts.map(([k,label])=>`<button class="phase-btn ${PHASE_FILTER===k?'active':''}" onclick="setPhaseFilter('${k}')">${label} <span class="pf-count">${counts[k]}</span></button>`).join('')}
+  </div>`;
+}
+function setPhaseFilter(p){ PHASE_FILTER=p; render(); }
 
 function emptyState(){
   return `<div class="empty">

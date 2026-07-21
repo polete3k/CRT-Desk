@@ -191,6 +191,14 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 .plan-item input{margin-top:2px;accent-color:var(--green);width:15px;height:15px;flex:0 0 auto}
 .plan-item span{line-height:1.4}
 .plan-count{font-size:11px;font-family:var(--mono);color:var(--ink-faint);margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+
+/* ---------- Phase filter ---------- */
+.phase-filter{display:inline-flex;gap:3px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:4px;margin-bottom:18px}
+.phase-btn{background:transparent;border:none;color:var(--ink-dim);font-family:var(--sans);font-size:13px;font-weight:600;padding:7px 15px;border-radius:8px;cursor:pointer;transition:.14s;display:flex;align-items:center;gap:6px}
+.phase-btn:hover{color:var(--ink)}
+.phase-btn.active{background:var(--panel-2);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.phase-btn .pf-count{font-family:var(--mono);font-size:10px;color:var(--ink-faint);background:var(--bg);padding:1px 6px;border-radius:5px}
+.phase-btn.active .pf-count{color:var(--green)}
 </style>
 </head>
 <body>
