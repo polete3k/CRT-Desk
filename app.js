@@ -1013,8 +1013,8 @@ function drawCumulative(id, T){
       plugins:{legend:{display:false},tooltip:{backgroundColor:'#161c27',borderColor:'#1f2733',borderWidth:1,titleColor:'#e8edf4',bodyColor:'#8a97a8',padding:10}},
       scales:{
         x:{grid:{color:'#1f2733'},ticks:{color:'#5a6573',font:{size:10}}},
-        y:{position:'left',grid:{color:'#1f2733'},ticks:{color:'#4d9fff',font:{size:10},callback:v=>v+'%'},min:0,max:100},
-        y1:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'#3ddc84',font:{size:10},callback:v=>v+'R'}}
+        y:{position:'left',grid:{color:'#1f2733'},ticks:{color:'#4d9fff',font:{size:10},stepSize:20,callback:v=>Math.round(v)+'%'},min:0,max:100},
+        y1:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'#3ddc84',font:{size:10},maxTicksLimit:6,callback:v=>Number(v).toFixed(2)+'R'}}
       }}});
 }
 function drawDistribution(id, T){
@@ -1046,12 +1046,12 @@ const FLAG_LABELS={
 };
 // Plan de trading — checklist que aparece al registrar (en catalán, como lo definió Pol)
 const PLAN_CHECKLIST=[
-  'Si és NY, plantejar abans els possibles escenaris',
+  'Tenir el DOL clar i anar només a favor del DOL (Innegociable)',
   'SL on s\u2019invalidi el trade',
-  'Tenir BIAS a favor (12h-4h)',
-  'No tenir rang contrari a prop',
-  'Tendència a favor',
-  'No Inside candle'
+  'Tenir rangs LTF (8h-2h) a favor',
+  'No tenir rang contrari important a prop',
+  'Tend\u00e8ncia a favor',
+  '1 SL per compte per dia'
 ];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
