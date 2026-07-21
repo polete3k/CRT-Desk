@@ -630,14 +630,15 @@ function renderCapital(v, T){
         <div class="field"><label>Balance de cierre actual ($)</label><input type="number" id="szBal" value="50000" oninput="calcSize()"></div>
       </div>
       <div class="field-row-3">
-        <div class="field"><label>Riesgo máx/trade (% del margen)</label><input type="number" id="szPct" value="25" oninput="calcSize()"></div>
-        <div class="field"><label>Stop (ticks)</label><input type="number" id="szTicks" value="20" oninput="calcSize()"></div>
-        <div class="field"><label>Valor del tick ($)</label><input type="number" id="szTickVal" value="1.25" step="0.01" oninput="calcSize()"></div>
+        <div class="field"><label>Riesgo ($) o % del margen</label><input type="number" id="szRiskUSD" value="" placeholder="ex. 660" oninput="calcSize()"></div>
+        <div class="field"><label>Stop (puntos)</label><input type="number" id="szPoints" value="60" oninput="calcSize()"></div>
+        <div class="field"><label>Valor por punto ($)</label><input type="number" id="szPtVal" value="2" step="0.01" oninput="calcSize()"></div>
       </div>
       <div class="field-row">
+        <div class="field"><label>Riesgo máx/trade (% del margen, si dejas $ vacío)</label><input type="number" id="szPct" value="25" oninput="calcSize()"></div>
         <div class="field"><label>Máx. stops/sesión</label><input type="number" id="szMaxStops" value="2" oninput="calcSize()"></div>
       </div>
-      <div class="hint" style="margin:-4px 0 12px">Tick values comunes: MES $1.25 · MNQ $0.50 · MYM $0.50 · M2K $0.50 · M6E $1.25 · ES $12.50 · NQ $5.00</div>
+      <div class="hint" style="margin:-4px 0 12px">Valor por punto: MNQ $2 · MES $5 · MYM $0.50 · M2K $5 · M6E $12.50 · NQ $20 · ES $50 · YM $5. (1 punt MNQ = 4 ticks × $0.50 = $2)</div>
       <div class="calc-out" id="szOut"></div>
     </div>
 
@@ -668,15 +669,19 @@ function renderCapital(v, T){
 function calcSize(){
   const spec=selectedSpec('szAcct');
   if(!spec){ $('#szOut').innerHTML='<p class="hint">Selecciona una cuenta.</p>'; return; }
-  const bal=+$('#szBal').value||0, pct=+$('#szPct').value||0, ticks=+$('#szTicks').value||0,
-        tv=+$('#szTickVal').value||0, maxStops=+$('#szMaxStops').value||1;
+  const bal=+$('#szBal').value||0, pct=+$('#szPct').value||0,
+        points=+$('#szPoints').value||0, ptVal=+$('#szPtVal').value||0,
+        maxStops=+$('#szMaxStops').value||1;
+  const riskUSDinput=parseFloat($('#szRiskUSD').value);
   const trailLock=spec.trailLock||0, lockedFloor=spec.lockedFloor||0, dd=spec.drawdown||0;
   let floor;
   if(trailLock && bal>=trailLock) floor=lockedFloor;
   else floor=bal-dd;
   const room = bal - floor;
-  const riskPerTrade = room*(pct/100);
-  const riskPerContract = ticks*tv;
+  // risc per trade: si l'usuari posa $ directe, s'usa; si no, % del marge
+  const usingDirect = !isNaN(riskUSDinput) && riskUSDinput>0;
+  const riskPerTrade = usingDirect ? riskUSDinput : room*(pct/100);
+  const riskPerContract = points*ptVal;   // punts × valor per punt
   const contractsRaw = riskPerContract? Math.floor(riskPerTrade/riskPerContract):0;
   const maxC = spec.maxMicro||9999;
   const contracts = Math.max(0, Math.min(contractsRaw, maxC));
@@ -694,9 +699,10 @@ function calcSize(){
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO REAL</div><div class="big">${fmt$(actualRisk)}</div></div>
     </div>
     <hr class="sep">
-    <div class="hint">Suelo DD actual: <b>${fmt$(floor)}</b>${trailLock&&bal>=trailLock?' (bloqueado ✓)':' (aún trailing)'} · Tope del plan: ${maxC===9999?'—':maxC+' micros'}${spec.maxMini?' / '+spec.maxMini+' minis':''}</div>
-    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El cálculo pedía ${contractsRaw} contratos, pero el plan limita a ${maxC}. Recortado al máximo.</div>`:''}
-    <div class="hint ${safeRoom?'':'dd-warn'}" style="margin-top:6px">Con ${maxStops} stops seguidos perderías <b>${fmt$(ifMaxStops)}</b> ${safeRoom?`— dentro de tu margen de ${fmt$(room)}. ✓`:`— ¡te acerca al drawdown! Reduce % o stop.`}</div>
+    <div class="hint">Risc per contracte: ${points} punts × ${fmt$(ptVal)}/punt = <b>${fmt$(riskPerContract)}</b> · ${usingDirect?`Fent servir risc directe de ${fmt$(riskPerTrade)}`:`Fent servir ${pct}% del marge`}</div>
+    <div class="hint" style="margin-top:6px">Suelo DD actual: <b>${fmt$(floor)}</b>${trailLock&&bal>=trailLock?' (bloqueado ✓)':' (aún trailing)'} · Tope del plan: ${maxC===9999?'—':maxC+' micros'}${spec.maxMini?' / '+spec.maxMini+' minis':''}</div>
+    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El càlcul demanava ${contractsRaw} contractes, però el pla limita a ${maxC}. Retallat al màxim.</div>`:''}
+    <div class="hint ${safeRoom?'':'dd-warn'}" style="margin-top:6px">Con ${maxStops} stops seguidos perderías <b>${fmt$(ifMaxStops)}</b> ${safeRoom?`— dentro de tu margen de ${fmt$(room)}. ✓`:`— ¡te acerca al drawdown! Reduce riesgo o stop.`}</div>
     ${dll?`<div class="hint ${safeDLL?'':'dd-warn'}" style="margin-top:6px">Daily loss limit ${fmt$(dll)}: ${safeDLL?`${maxStops} stops (${fmt$(ifMaxStops)}) caben dentro. ✓`:`⚠ ${maxStops} stops (${fmt$(ifMaxStops)}) superan el DLL. Baja el riesgo.`}</div>`:''}
   `;
 }
