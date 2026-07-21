@@ -5,28 +5,74 @@
 
 const STORE_KEY = 'crtdesk_v1';
 
-// ---- Especificaciones oficiales LucidFlex (support.lucidtrading.com, nov2025-may2026) ----
-const LUCIDFLEX = {
-  25000:  { profitTarget:1250, mll:1000, trailLock:26100,  lockedMLL:25100,  maxMini:2,  maxMicro:20,  minDailyProfit:100, payoutCap:1000 },
-  50000:  { profitTarget:3000, mll:2000, trailLock:52100,  lockedMLL:50100,  maxMini:4,  maxMicro:40,  minDailyProfit:150, payoutCap:2000 },
-  100000: { profitTarget:6000, mll:3000, trailLock:103100, lockedMLL:100100, maxMini:6,  maxMicro:60,  minDailyProfit:200, payoutCap:2500 },
-  150000: { profitTarget:9000, mll:4500, trailLock:154600, lockedMLL:150100, maxMini:10, maxMicro:100, minDailyProfit:250, payoutCap:3000 }
-};
-const LUCID_RULES = {
-  profitSplit: 0.90,            // 90/10
-  consistencyEval: 0.50,        // 50% máx día/total SOLO en eval
-  consistencyFunded: null,      // sin consistency en funded
-  payoutDaysRequired: 5,        // 5 días con profit mínimo
-  payoutMin: 500,
-  payoutsBeforeLive: 5,
-  closeBy: '16:45 EST',
-  noDLL: true
+/* ============================================================
+   REGLAS MULTI-FIRMA
+   Cada plan = { firm, plan, size, phases:{eval:{...}, funded:{...}} }
+   Campos por fase:
+     profitTarget  — objetivo de profit ($). 0 en funded si no aplica.
+     drawdown      — cantidad del trailing EOD ($)
+     trailLock     — balance de cierre en que el suelo se bloquea (0 = no bloquea)
+     lockedFloor   — suelo una vez bloqueado ($) (0 = no aplica)
+     dailyLoss     — daily loss limit ($). 0 = sin DLL.
+     maxMicro/maxMini — tope de contratos
+     minDays       — mínimo días de trading
+     consistency   — % máx día/total (0 = sin regla)
+     minDailyProfit — mínimo para contar día de payout (funded)
+     payoutCap     — tope de retirada
+   ============================================================ */
+
+// Preset verificado: LucidFlex (support.lucidtrading.com). Eval y funded comparten trailing.
+const FIRM_PRESETS = {
+  'LucidFlex': {
+    trailing:'eod',
+    plans:{
+      '25K': { size:25000, eval:{profitTarget:1250,drawdown:1000,trailLock:26100,lockedFloor:25100,dailyLoss:0,maxMicro:20,maxMini:2,minDays:1,consistency:50,minDailyProfit:100,payoutCap:1000},
+                          funded:{profitTarget:0,drawdown:1000,trailLock:26100,lockedFloor:25100,dailyLoss:0,maxMicro:20,maxMini:2,minDays:5,consistency:0,minDailyProfit:100,payoutCap:1000} },
+      '50K': { size:50000, eval:{profitTarget:3000,drawdown:2000,trailLock:52100,lockedFloor:50100,dailyLoss:0,maxMicro:40,maxMini:4,minDays:1,consistency:50,minDailyProfit:150,payoutCap:2000},
+                          funded:{profitTarget:0,drawdown:2000,trailLock:52100,lockedFloor:50100,dailyLoss:0,maxMicro:40,maxMini:4,minDays:5,consistency:0,minDailyProfit:150,payoutCap:2000} },
+      '100K':{ size:100000,eval:{profitTarget:6000,drawdown:3000,trailLock:103100,lockedFloor:100100,dailyLoss:0,maxMicro:60,maxMini:6,minDays:1,consistency:50,minDailyProfit:200,payoutCap:2500},
+                          funded:{profitTarget:0,drawdown:3000,trailLock:103100,lockedFloor:100100,dailyLoss:0,maxMicro:60,maxMini:6,minDays:5,consistency:0,minDailyProfit:200,payoutCap:2500} },
+      '150K':{ size:150000,eval:{profitTarget:9000,drawdown:4500,trailLock:154600,lockedFloor:150100,dailyLoss:0,maxMicro:100,maxMini:10,minDays:1,consistency:50,minDailyProfit:250,payoutCap:3000},
+                          funded:{profitTarget:0,drawdown:4500,trailLock:154600,lockedFloor:150100,dailyLoss:0,maxMicro:100,maxMini:10,minDays:5,consistency:0,minDailyProfit:250,payoutCap:3000} }
+    }
+  },
+
+  // Topstep — 50K (trailing EOD por elección del usuario). Combine + Express Funded (opción Standard).
+  'Topstep': {
+    trailing:'eod',
+    plans:{
+      '50K': { size:50000,
+        eval:{profitTarget:3000,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:50,maxMini:5,minDays:1,consistency:50,minDailyProfit:0,payoutCap:0},
+        funded:{profitTarget:0,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:50,maxMini:5,minDays:5,consistency:0,minDailyProfit:150,payoutCap:4000} }
+    }
+  },
+
+  // MyFundedFutures — 50K Builder (Max Drawdown EOD + Daily Drawdown). Micro scaling 10:1.
+  'MyFundedFutures': {
+    trailing:'eod',
+    plans:{
+      '50K Builder': { size:50000,
+        eval:{profitTarget:3000,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:40,maxMini:4,minDays:1,consistency:0,minDailyProfit:0,payoutCap:0},
+        funded:{profitTarget:0,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:40,maxMini:4,minDays:2,consistency:50,minDailyProfit:0,payoutCap:2000} }
+    }
+  },
+
+  // FundedNext Futures — 50K. Max Loss EOD, sin daily loss.
+  'FundedNext': {
+    trailing:'eod',
+    plans:{
+      '50K': { size:50000,
+        eval:{profitTarget:2500,drawdown:1500,trailLock:0,lockedFloor:0,dailyLoss:0,maxMicro:30,maxMini:3,minDays:1,consistency:40,minDailyProfit:0,payoutCap:0},
+        funded:{profitTarget:0,drawdown:1500,trailLock:0,lockedFloor:0,dailyLoss:0,maxMicro:30,maxMini:3,minDays:5,consistency:0,minDailyProfit:0,payoutCap:1500} }
+    }
+  }
 };
 
 const DEFAULTS = {
   trades: [],
   accounts: [],
-  settings: { dailyRiskUSD: 400, riskPerTradePct: 25 }, // límite propio opcional; sizing va sobre margen MLL
+  firms: null,   // se inicializa desde FIRM_PRESETS la primera vez (así el usuario puede editarlas)
+  settings: { riskPerTradePct: 25 },
   meta: { created: Date.now() }
 };
 
@@ -35,9 +81,35 @@ let DB = load();
 function load(){
   try{
     const raw = localStorage.getItem(STORE_KEY);
-    if(!raw) return structuredClone(DEFAULTS);
-    return Object.assign(structuredClone(DEFAULTS), JSON.parse(raw));
-  }catch(e){ return structuredClone(DEFAULTS); }
+    const base = raw ? Object.assign(structuredClone(DEFAULTS), JSON.parse(raw)) : structuredClone(DEFAULTS);
+    // inicializar firmas desde presets si es la primera vez
+    if(!base.firms){ base.firms = structuredClone(FIRM_PRESETS); }
+    // añadir firmas de preset que aún no estén (sin pisar las editadas por el usuario)
+    Object.keys(FIRM_PRESETS).forEach(f=>{
+      if(!base.firms[f]) base.firms[f]=structuredClone(FIRM_PRESETS[f]);
+    });
+    // migrar cuentas viejas (modelo size/maxDD) al nuevo firm/plan
+    (base.accounts||[]).forEach(a=>{
+      if(!a.plan && a.size){
+        a.firm = a.firm||'LucidFlex';
+        a.plan = (a.size/1000)+'K';
+        a.phase = a.phase||'Evaluación';
+      }
+    });
+    return base;
+  }catch(e){
+    const d = structuredClone(DEFAULTS);
+    d.firms = structuredClone(FIRM_PRESETS);
+    return d;
+  }
+}
+
+// Helper: obtener specs de un plan/fase
+function planSpec(firmName, planName, phase){
+  const f = (DB.firms||{})[firmName];
+  if(!f || !f.plans[planName]) return null;
+  const p = f.plans[planName];
+  return { size:p.size, trailing:f.trailing||'eod', ...(p[phase==='Funded'?'funded':'eval']) };
 }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
 
@@ -96,6 +168,37 @@ function profitFactor(trades){
 }
 function totalR(trades){ return trades.reduce((s,t)=>s+(t.realizedR||0),0); }
 function totalPnl(trades){ return trades.reduce((s,t)=>s+(t.pnl||0),0); }
+
+/* ---------- Comparador de R:R ----------
+   Simula el resultado de cada trade bajo un ratio dado.
+   - Escenario real (1:1,5): usa realizedR tal cual.
+   - Escenario 1:1: usa result11. TP=+1R, SL=-1R, BE=0.
+   Solo cuenta trades que tengan result11 registrado. */
+function scenarioStats(trades, mode){
+  // mode: 'real' | '1:1'
+  const valid = mode==='1:1' ? trades.filter(t=>t.result11) : trades;
+  if(!valid.length) return {n:0,exp:0,wr:0,totalR:0,pnl:0};
+  let sumR=0, wins=0, counted=0, pnl=0;
+  valid.forEach(t=>{
+    let r;
+    if(mode==='1:1'){
+      r = t.result11==='win'?1 : t.result11==='loss'?-1 : 0;
+    } else {
+      r = t.realizedR||0;
+    }
+    sumR+=r;
+    pnl += r*(t.riskUSD||0);
+    if(t.result11!=='be' && mode==='1:1'){ counted++; if(r>0)wins++; }
+    else if(mode==='real' && t.result!=='be'){ counted++; if(r>0)wins++; }
+  });
+  return {
+    n:valid.length,
+    exp:sumR/valid.length,
+    wr: counted? wins/counted*100 : 0,
+    totalR:sumR,
+    pnl
+  };
+}
 
 // COSTE DE LA INDISCIPLINA — métrica estrella
 // Diferencia entre lo planificado y lo realizado en trades marcados con error.
@@ -282,14 +385,21 @@ function renderOverview(v, T){
         <div style="position:relative;height:220px"><canvas id="equityChart"></canvas></div>
       </div>
       <div class="card">
-        <h3>Rendimiento por setup</h3>
-        ${breakdownTable(breakdown(T,'setup'))}
+        <h3>Winrate y expectancy acumulados</h3>
+        <div style="position:relative;height:220px"><canvas id="cumChart"></canvas></div>
+        <div class="legend"><span><span class="dot" style="background:var(--blue)"></span>Winrate %</span><span><span class="dot" style="background:var(--green)"></span>Expectancy (R)</span></div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Rendimiento por setup</h3>
+      ${breakdownTable(breakdown(T,'setup'))}
     </div>
 
     ${autoInsights(T)}
   `;
   drawEquity('equityChart', T);
+  drawCumulative('cumChart', T);
 }
 
 function breakdownTable(rows){
@@ -439,6 +549,39 @@ function renderPerformance(v, T){
       <div class="card"><h3>Por día de la semana</h3>${breakdownTable(breakdown(T,'weekday'))}</div>
       <div class="card"><h3>Por setup</h3>${breakdownTable(breakdown(T,'setup'))}</div>
     </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Comparador de R:R — tu 1:1,5 vs 1:1</h3>
+      ${(()=>{
+        const real=scenarioStats(T,'real');
+        const withData=T.filter(t=>t.result11);
+        if(withData.length<3) return `<p class="hint">Necesitas al menos 3 trades con el resultado a 1:1 registrado para comparar. Llevas ${withData.length}. Ve marcando "¿Qué habría pasado a 1:1?" al registrar cada trade.</p>`;
+        // comparar SOLO sobre los trades que tienen ambos datos, para ser justos
+        const realSub=scenarioStats(withData,'real');
+        const alt=scenarioStats(withData,'1:1');
+        const better = realSub.pnl>=alt.pnl ? 'real' : '1:1';
+        const diff=Math.abs(realSub.pnl-alt.pnl);
+        return `
+        <div class="grid g-2">
+          <div class="calc-out" style="${better==='real'?'border-color:var(--green-dim)':''}">
+            <div class="label" style="font-size:11px;font-weight:600;margin-bottom:6px;color:${better==='real'?'var(--green)':'var(--ink-dim)'}">TU 1:1,5 ${better==='real'?'👑':''}</div>
+            <div class="big ${cls(realSub.pnl)}">${fmt$(realSub.pnl)}</div>
+            <div class="hint" style="margin-top:8px">Exp ${fmtR(realSub.exp)} · WR ${fmt(realSub.wr,0)}% · ${fmtR(realSub.totalR)}</div>
+          </div>
+          <div class="calc-out" style="${better==='1:1'?'border-color:var(--green-dim)':''}">
+            <div class="label" style="font-size:11px;font-weight:600;margin-bottom:6px;color:${better==='1:1'?'var(--green)':'var(--ink-dim)'}">A 1:1 ${better==='1:1'?'👑':''}</div>
+            <div class="big ${cls(alt.pnl)}">${fmt$(alt.pnl)}</div>
+            <div class="hint" style="margin-top:8px">Exp ${fmtR(alt.exp)} · WR ${fmt(alt.wr,0)}% · ${fmtR(alt.totalR)}</div>
+          </div>
+        </div>
+        <div class="insight ${better==='real'?'':'warn'}" style="margin-top:14px">
+          Sobre ${withData.length} trades comparables, ${better==='real'
+            ? `tu <b>1:1,5 rinde mejor</b>: ${fmt$(diff)} más que ir a 1:1. Tu ratio actual es el correcto.`
+            : `ir a <b>1:1 habría rendido ${fmt$(diff)} más</b>. El winrate más alto compensa el objetivo más corto. Plantéate probar 1:1 en una parte de tu size.`}
+        </div>
+        <div class="hint" style="margin-top:8px">Comparación justa: solo cuenta los ${withData.length} trades donde registraste ambos resultados.</div>
+        `;
+      })()}
+    </div>
     <div class="card">
       <h3>Distribución de R por trade</h3>
       <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
@@ -450,37 +593,51 @@ function renderPerformance(v, T){
 /* ============================================================
    CAPITAL & SIZING
    ============================================================ */
+function planOptionsHTML(selId){
+  // genera <option> "Firma|Plan|Fase" para todos los planes de todas las firmas
+  let opts='';
+  Object.keys(DB.firms||{}).forEach(firm=>{
+    Object.keys(DB.firms[firm].plans).forEach(plan=>{
+      ['Evaluación','Funded'].forEach(phase=>{
+        const val=`${firm}|${plan}|${phase}`;
+        opts+=`<option value="${val}">${firm} ${plan} · ${phase}</option>`;
+      });
+    });
+  });
+  return opts;
+}
+function selectedSpec(selId){
+  const val=$('#'+selId)?.value||'';
+  const [firm,plan,phase]=val.split('|');
+  return planSpec(firm,plan,phase);
+}
+
 function renderCapital(v, T){
   const k = kellyFraction(T);
   const halfK = k/2, quarterK = k/4;
-  const exp = expectancy(T);
 
-  // micros más operados por traders CRT: MES, MNQ, M6E (EUR). Tabla de tick values.
   v.innerHTML=`
-    <div class="section-title">Sizing — LucidFlex</div>
+    <div class="section-title">Sizing</div>
 
     <div class="insight" style="margin-bottom:16px">
-      <b>LucidFlex no tiene DLL.</b> Tu única restricción de pérdida es el <b>MLL (Max Loss Limit)</b> con drawdown End-of-Day: el suelo sube con tu balance de cierre hasta el trail y luego se bloquea en inicial+$100. El sizing aquí se calcula sobre tu <b>margen actual hasta el MLL</b>, no sobre un límite diario.
+      Todas tus firmas usan <b>trailing EOD</b>: el suelo sube con tu balance de cierre. El sizing se calcula sobre tu <b>margen actual hasta el drawdown</b>. Si tu plan tiene daily loss limit, respétalo también — la calculadora te avisa.
     </div>
 
     <div class="card" style="margin-bottom:14px">
-      <h3>Calculadora de sizing por margen al MLL</h3>
-      <div class="field-row-3">
-        <div class="field"><label>Cuenta LucidFlex</label><select id="szAcct" onchange="calcSize()">
-          <option value="25000">25K</option>
-          <option value="50000" selected>50K</option>
-          <option value="100000">100K</option>
-          <option value="150000">150K</option>
-        </select></div>
+      <h3>Calculadora de sizing por margen al drawdown</h3>
+      <div class="field-row">
+        <div class="field"><label>Cuenta</label><select id="szAcct" onchange="calcSize()">${planOptionsHTML('szAcct')}</select></div>
         <div class="field"><label>Balance de cierre actual ($)</label><input type="number" id="szBal" value="50000" oninput="calcSize()"></div>
-        <div class="field"><label>Riesgo máx. por trade (% del margen)</label><input type="number" id="szPct" value="25" oninput="calcSize()"></div>
       </div>
       <div class="field-row-3">
+        <div class="field"><label>Riesgo máx/trade (% del margen)</label><input type="number" id="szPct" value="25" oninput="calcSize()"></div>
         <div class="field"><label>Stop (ticks)</label><input type="number" id="szTicks" value="20" oninput="calcSize()"></div>
         <div class="field"><label>Valor del tick ($)</label><input type="number" id="szTickVal" value="1.25" step="0.01" oninput="calcSize()"></div>
+      </div>
+      <div class="field-row">
         <div class="field"><label>Máx. stops/sesión</label><input type="number" id="szMaxStops" value="2" oninput="calcSize()"></div>
       </div>
-      <div class="hint" style="margin:-4px 0 12px">Tick values comunes: MES $1.25 · MNQ $0.50 · M6E (Euro micro) $1.25 · ES $12.50 · NQ $5.00</div>
+      <div class="hint" style="margin:-4px 0 12px">Tick values comunes: MES $1.25 · MNQ $0.50 · MYM $0.50 · M2K $0.50 · M6E $1.25 · ES $12.50 · NQ $5.00</div>
       <div class="calc-out" id="szOut"></div>
     </div>
 
@@ -495,74 +652,76 @@ function renderCapital(v, T){
     </div>
 
     <div class="card">
-      <h3>Proyección de payout LucidFlex</h3>
+      <h3>Proyección de payout</h3>
       <div class="field-row-3">
-        <div class="field"><label>Cuenta</label><select id="pjAcct" onchange="calcPayout()">
-          <option value="25000">25K</option>
-          <option value="50000" selected>50K</option>
-          <option value="100000">100K</option>
-          <option value="150000">150K</option>
-        </select></div>
+        <div class="field"><label>Cuenta</label><select id="pjAcct" onchange="calcPayout()">${planOptionsHTML('pjAcct')}</select></div>
         <div class="field"><label>Profit medio/día ganador ($)</label><input type="number" id="pjDaily" value="300" oninput="calcPayout()"></div>
         <div class="field"><label>Días ganadores/semana</label><input type="number" id="pjDays" value="3" oninput="calcPayout()"></div>
       </div>
       <div class="calc-out" id="pjOut"></div>
     </div>
   `;
+  // seleccionar por defecto la primera fase funded si existe
   calcSize(); calcPayout();
 }
 
 function calcSize(){
-  const size=+$('#szAcct').value;
-  const spec=LUCIDFLEX[size];
+  const spec=selectedSpec('szAcct');
+  if(!spec){ $('#szOut').innerHTML='<p class="hint">Selecciona una cuenta.</p>'; return; }
   const bal=+$('#szBal').value||0, pct=+$('#szPct').value||0, ticks=+$('#szTicks').value||0,
         tv=+$('#szTickVal').value||0, maxStops=+$('#szMaxStops').value||1;
-  // suelo MLL trailing: balance - mll, bloqueado en lockedMLL una vez supera el trail
-  const floor = bal>=spec.trailLock ? spec.lockedMLL : (bal - spec.mll);
-  const room = bal - floor;               // margen hasta breach
+  const trailLock=spec.trailLock||0, lockedFloor=spec.lockedFloor||0, dd=spec.drawdown||0;
+  let floor;
+  if(trailLock && bal>=trailLock) floor=lockedFloor;
+  else floor=bal-dd;
+  const room = bal - floor;
   const riskPerTrade = room*(pct/100);
   const riskPerContract = ticks*tv;
   const contractsRaw = riskPerContract? Math.floor(riskPerTrade/riskPerContract):0;
-  const contracts = Math.max(0, Math.min(contractsRaw, spec.maxMicro)); // tope de contratos del plan
-  const cappedByPlan = contractsRaw>spec.maxMicro;
+  const maxC = spec.maxMicro||9999;
+  const contracts = Math.max(0, Math.min(contractsRaw, maxC));
+  const cappedByPlan = contractsRaw>maxC;
   const actualRisk = contracts*riskPerContract;
   const ifMaxStops = actualRisk*maxStops;
-  const safe = ifMaxStops <= room;
+  const dll = spec.dailyLoss||0;
+  const safeRoom = ifMaxStops <= room;
+  const safeDLL = !dll || ifMaxStops <= dll;
   $('#szOut').innerHTML=`
     <div class="grid g-4" style="gap:10px">
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">MARGEN AL MLL</div><div class="big">${fmt$(room)}</div></div>
+      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">MARGEN AL DD</div><div class="big">${fmt$(room)}</div></div>
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO/TRADE</div><div class="big">${fmt$(riskPerTrade)}</div></div>
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">CONTRATOS (micros)</div><div class="big" style="color:var(--green)">${contracts}</div></div>
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO REAL</div><div class="big">${fmt$(actualRisk)}</div></div>
     </div>
     <hr class="sep">
-    <div class="hint">Suelo MLL actual: <b>${fmt$(floor)}</b>${bal>=spec.trailLock?' (bloqueado ✓)':' (aún trailing)'} · Tope del plan: ${spec.maxMicro} micros / ${spec.maxMini} minis</div>
-    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El cálculo pedía más contratos, pero el plan ${size/1000}K limita a ${spec.maxMicro} micros. Tamaño recortado al máximo permitido.</div>`:''}
-    <div class="hint ${safe?'':'dd-warn'}" style="margin-top:6px">Con ${maxStops} stops seguidos perderías <b>${fmt$(ifMaxStops)}</b> ${safe?`— dentro de tu margen de ${fmt$(room)}. ✓`:`— ¡te acerca peligrosamente al MLL! Reduce % o stop.`}</div>
+    <div class="hint">Suelo DD actual: <b>${fmt$(floor)}</b>${trailLock&&bal>=trailLock?' (bloqueado ✓)':' (aún trailing)'} · Tope del plan: ${maxC===9999?'—':maxC+' micros'}${spec.maxMini?' / '+spec.maxMini+' minis':''}</div>
+    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El cálculo pedía ${contractsRaw} contratos, pero el plan limita a ${maxC}. Recortado al máximo.</div>`:''}
+    <div class="hint ${safeRoom?'':'dd-warn'}" style="margin-top:6px">Con ${maxStops} stops seguidos perderías <b>${fmt$(ifMaxStops)}</b> ${safeRoom?`— dentro de tu margen de ${fmt$(room)}. ✓`:`— ¡te acerca al drawdown! Reduce % o stop.`}</div>
+    ${dll?`<div class="hint ${safeDLL?'':'dd-warn'}" style="margin-top:6px">Daily loss limit ${fmt$(dll)}: ${safeDLL?`${maxStops} stops (${fmt$(ifMaxStops)}) caben dentro. ✓`:`⚠ ${maxStops} stops (${fmt$(ifMaxStops)}) superan el DLL. Baja el riesgo.`}</div>`:''}
   `;
 }
 
 function calcPayout(){
-  const size=+$('#pjAcct').value;
-  const spec=LUCIDFLEX[size];
+  const spec=selectedSpec('pjAcct');
+  if(!spec){ $('#pjOut').innerHTML='<p class="hint">Selecciona una cuenta.</p>'; return; }
   const daily=+$('#pjDaily').value||0, daysWk=+$('#pjDays').value||0;
-  const meetsMin = daily>=spec.minDailyProfit;
-  // semanas hasta cumplir 5 días con profit mínimo
-  const qualDaysPerWk = Math.min(daysWk, daysWk); // días que cumplen el mínimo = los ganadores si daily>=min
-  const weeksToPayout = meetsMin && qualDaysPerWk>0 ? Math.ceil(LUCID_RULES.payoutDaysRequired/qualDaysPerWk) : Infinity;
+  const minDP=spec.minDailyProfit||0;
+  const daysReq=spec.minDays||5;
+  const meetsMin = minDP? daily>=minDP : daily>0;
+  const weeksToPayout = meetsMin && daysWk>0 ? Math.ceil(daysReq/daysWk) : Infinity;
   const cycleProfit = daily*daysWk*(weeksToPayout===Infinity?0:weeksToPayout);
-  const grossPayout = Math.min(cycleProfit*0.5, spec.payoutCap); // 50% del profit hasta el cap
-  const netPayout = grossPayout*LUCID_RULES.profitSplit;          // 90/10
+  const cap = spec.payoutCap||Infinity;
+  const grossPayout = Math.min(cycleProfit, cap);
   $('#pjOut').innerHTML=`
     <div class="grid g-3" style="gap:10px">
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">SEMANAS AL 1er PAYOUT</div><div class="big">${weeksToPayout===Infinity?'—':weeksToPayout}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT BRUTO (máx)</div><div class="big">${fmt$(grossPayout)}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">NETO (90%)</div><div class="big" style="color:var(--green)">${fmt$(netPayout)}</div></div>
+      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">PROFIT ACUMULADO</div><div class="big">${fmt$(cycleProfit)}</div></div>
+      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT (máx${cap!==Infinity?' cap':''})</div><div class="big" style="color:var(--green)">${fmt$(grossPayout)}</div></div>
     </div>
     <hr class="sep">
     <div class="hint ${meetsMin?'':'dd-warn'}">${meetsMin
-      ? `Tus días ganadores superan el mínimo de ${fmt$(spec.minDailyProfit)}/día. Necesitas 5 días con profit + neto positivo para pedir payout. Cap de retirada: ${fmt$(spec.payoutCap)} (50% del profit). A las 5 payouts pasas a live.`
-      : `⚠ ${fmt$(daily)}/día no llega al mínimo de ${fmt$(spec.minDailyProfit)} que LucidFlex exige para contar como "día con profit" en el ${size/1000}K.`}</div>
+      ? `Necesitas ${daysReq} días con profit${minDP?` ≥ ${fmt$(minDP)}`:''} y neto positivo para pedir payout.${cap!==Infinity?` Tope de retirada: ${fmt$(cap)}.`:''}`
+      : `⚠ ${fmt$(daily)}/día no llega al mínimo de ${fmt$(minDP)} que exige el plan para contar como día de payout.`}</div>
   `;
 }
 /* ============================================================
@@ -573,72 +732,93 @@ function renderAccounts(v, T){
   v.innerHTML=`
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
       <span>Cuentas & Payouts</span>
-      <button class="btn primary sm" onclick="openAccountModal()">+ Cuenta</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost sm" onclick="openFirmEditor()">⚙ Editar reglas</button>
+        <button class="btn primary sm" onclick="openAccountModal()">+ Cuenta</button>
+      </div>
     </div>
-    ${!accts.length?`<div class="empty"><div class="ico">▤</div><p class="hint">Sin cuentas. Añade tu LucidFlex (25K/50K/100K/150K) y las reglas se cargan solas.</p><button class="btn primary" style="margin-top:14px" onclick="openAccountModal()">+ Añadir LucidFlex</button></div>`:
+    ${!accts.length?`<div class="empty"><div class="ico">▤</div><p class="hint">Sin cuentas. Añade una de tus firmas (LucidFlex, Topstep, MyFundedFutures, FundedNext...) y las reglas se cargan solas.</p><button class="btn primary" style="margin-top:14px" onclick="openAccountModal()">+ Añadir cuenta</button></div>`:
     accts.map(a=>{
-      const spec = LUCIDFLEX[a.size]||{};
+      const spec = planSpec(a.firm, a.plan, a.phase) || {};
       const aTrades = T.filter(t=>t.account===a.name);
       const realized = totalPnl(aTrades);
       const balance = (a.startBalance||0)+realized;
-      // MLL trailing EOD: sube con balance hasta trailLock, luego se bloquea en lockedMLL
-      const floor = balance>=(a.trailLock||spec.trailLock) ? (a.lockedMLL||spec.lockedMLL) : (balance - (a.maxDD||spec.mll));
+      const dd = spec.drawdown||0;
+      const trailLock = spec.trailLock||0;
+      const lockedFloor = spec.lockedFloor||0;
+      // Trailing EOD genérico: suelo sube con balance hasta trailLock, luego bloqueado en lockedFloor
+      let floor;
+      if(trailLock && balance>=trailLock) floor = lockedFloor;
+      else floor = balance - dd;
+      const locked = trailLock && balance>=trailLock;
       const ddRoom = balance - floor;
-      const ddPct = (a.maxDD||spec.mll)? Math.max(0,Math.min(100, ddRoom/(a.maxDD||spec.mll)*100)) : 0;
-      const locked = balance>=(a.trailLock||spec.trailLock);
-      const targetRoom = a.phase==='Evaluación'? a.startBalance+a.target - balance : 0;
-      const targetPct = a.phase==='Evaluación'&&a.target? Math.max(0,Math.min(100, realized/a.target*100)) : 0;
+      const ddPct = dd? Math.max(0,Math.min(100, ddRoom/dd*100)) : 0;
 
-      // payout tracking: días distintos con profit >= minDailyProfit
+      const target = spec.profitTarget||0;
+      const targetRoom = a.phase==='Evaluación'&&target? (a.startBalance+target) - balance : 0;
+      const targetPct = a.phase==='Evaluación'&&target? Math.max(0,Math.min(100, realized/target*100)) : 0;
+
+      // payout tracking (funded): días con profit >= minDailyProfit
       const profitByDay={};
       aTrades.forEach(t=>{ profitByDay[t.date]=(profitByDay[t.date]||0)+(t.pnl||0); });
-      const qualDays = Object.values(profitByDay).filter(p=>p>=spec.minDailyProfit).length;
-      const payoutReady = qualDays>=LUCID_RULES.payoutDaysRequired && realized>0;
+      const minDP=spec.minDailyProfit||0;
+      const qualDays = Object.values(profitByDay).filter(p=>minDP?p>=minDP:p>0).length;
+      const daysReq = spec.minDays||5;
+      const payoutReady = qualDays>=daysReq && realized>0;
 
-      // consistency (solo eval): mayor día / profit total
+      // consistency (si aplica): mayor día / profit total
       const dayProfits=Object.values(profitByDay).filter(p=>p>0);
       const maxDay=dayProfits.length?Math.max(...dayProfits):0;
       const consistency = realized>0? maxDay/realized*100 : 0;
-      const consistencyOK = consistency<=50;
+      const consLimit = spec.consistency||0;
+      const consistencyOK = !consLimit || consistency<=consLimit;
+
+      // daily loss limit: peor día
+      const worstDay = Math.min(0, ...Object.values(profitByDay));
+      const dll = spec.dailyLoss||0;
+
+      const firmObj=DB.firms[a.firm]||{};
+      const trailLabel = (firmObj.trailing||'eod')==='eod'?'EOD trailing':(firmObj.trailing==='intraday'?'trailing intradía':'estático');
 
       return `<div class="card" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
           <div>
             <div style="font-size:15px;font-weight:700">${a.name}</div>
-            <div class="acct-meta">LucidFlex ${a.size/1000}K · ${a.phase} · EOD trailing · ${aTrades.length} trades</div>
+            <div class="acct-meta">${a.firm} ${a.plan} · ${a.phase} · ${trailLabel} · ${aTrades.length} trades</div>
           </div>
           <div style="display:flex;gap:6px">
-            <span class="tag ${ddPct>40?'ok':ddPct>20?'warn':'bad'}">MLL ${fmt(ddPct,0)}%</span>
+            <span class="tag ${ddPct>40?'ok':ddPct>20?'warn':'bad'}">DD ${fmt(ddPct,0)}%</span>
             <button class="btn ghost sm icon" onclick="editAccount('${a.id}')" title="Editar">✎</button>
           </div>
         </div>
         <div class="grid g-3" style="gap:10px;margin-bottom:14px">
           <div><div class="label" style="font-size:10px;color:var(--ink-faint)">BALANCE</div><div style="font-family:var(--mono);font-size:18px;font-weight:700">${fmt$(balance)}</div></div>
           <div><div class="label" style="font-size:10px;color:var(--ink-faint)">P&L</div><div style="font-family:var(--mono);font-size:18px;font-weight:700" class="${cls(realized)}">${fmt$(realized)}</div></div>
-          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">SUELO MLL ${locked?'🔒':''}</div><div style="font-family:var(--mono);font-size:18px;font-weight:700">${fmt$(floor)}</div></div>
+          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">SUELO DD ${locked?'🔒':''}</div><div style="font-family:var(--mono);font-size:18px;font-weight:700">${fmt$(floor)}</div></div>
         </div>
         <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Margen hasta MLL (breach)</span><span style="font-family:var(--mono)">${fmt$(ddRoom)}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Margen hasta drawdown (breach)</span><span style="font-family:var(--mono)">${fmt$(ddRoom)}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${ddPct}%;background:${ddPct>40?'var(--green)':ddPct>20?'var(--amber)':'var(--red)'}"></div></div>
         </div>
-        ${a.phase==='Evaluación'?`
+        ${dll?`<div class="insight ${worstDay>-dll?'':'bad'}" style="margin:0 0 12px">Daily loss limit: <b>${fmt$(dll)}</b>. Tu peor día: ${fmt$(worstDay)}. ${worstDay>-dll?'Dentro del límite ✓':'⚠ ¡Superaste el DLL!'}</div>`:''}
+        ${a.phase==='Evaluación'&&target?`
         <div style="margin-bottom:12px">
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Progreso al profit target</span><span style="font-family:var(--mono)">${fmt(targetPct,0)}% · faltan ${fmt$(Math.max(0,targetRoom))}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${targetPct}%;background:var(--blue)"></div></div>
+        </div>`:''}
+        ${consLimit?`<div class="insight ${consistencyOK?'':'warn'}" style="margin-top:10px">Consistency: tu mayor día es <b>${fmt(consistency,0)}%</b> del profit (límite ${consLimit}%). ${consistencyOK?'Dentro ✓':'⚠ Reparte más el profit entre días.'}</div>`:''}
+        ${a.phase==='Funded'?`
+        <div style="margin-bottom:6px;margin-top:10px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Días con profit para payout${minDP?` (≥${fmt$(minDP)})`:''}</span><span style="font-family:var(--mono)">${qualDays} / ${daysReq}</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,qualDays/daysReq*100)}%;background:${payoutReady?'var(--green)':'var(--violet)'}"></div></div>
         </div>
-        <div class="insight ${consistencyOK?'':'warn'}" style="margin-top:10px">Consistency (eval): tu mayor día es <b>${fmt(consistency,0)}%</b> del profit total. ${consistencyOK?'Bajo el 50% ✓ — puedes subir a funded al llegar al target.':'⚠ Supera el 50%: sigue operando para repartir el profit antes de poder pasar a funded.'}</div>
-        `:`
-        <div style="margin-bottom:6px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Días con profit para payout (≥${fmt$(spec.minDailyProfit)})</span><span style="font-family:var(--mono)">${qualDays} / 5</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,qualDays/5*100)}%;background:${payoutReady?'var(--green)':'var(--violet)'}"></div></div>
-        </div>
-        <div class="insight ${payoutReady?'':''}" style="margin-top:10px">${payoutReady
-          ? `✓ <b>Payout disponible.</b> Tienes ${qualDays} días con profit y neto positivo. Puedes retirar hasta ${fmt$(spec.payoutCap)} (50% del profit), neto 90%. Recuerda: a las 5 payouts pasas a live.`
-          : `Te faltan <b>${Math.max(0,5-qualDays)} días</b> con profit ≥ ${fmt$(spec.minDailyProfit)} para poder pedir payout. Sin consistency rule en funded.`}</div>
-        `}
+        <div class="insight" style="margin-top:10px">${payoutReady
+          ? `✓ <b>Payout disponible.</b> ${qualDays} días con profit y neto positivo.${spec.payoutCap?` Tope de retirada ${fmt$(spec.payoutCap)}.`:''}`
+          : `Te faltan <b>${Math.max(0,daysReq-qualDays)} días</b> con profit${minDP?` ≥ ${fmt$(minDP)}`:''} para pedir payout.`}</div>
+        `:''}
       </div>`;
     }).join('')}
-    ${accts.length?`<div class="insight" style="margin-top:6px"><b>MLL EOD de LucidFlex:</b> el suelo sube con tu balance de cierre hasta el trail lock y entonces se bloquea en inicial+$100 (🔒). No hay DLL: dentro del día solo importa no tocar el suelo al cierre. Cierre obligatorio 16:45 EST (no falla la cuenta, pero te liquidan posiciones abiertas).</div>`:''}
+    ${accts.length?`<div class="insight" style="margin-top:6px">Todas tus firmas usan <b>trailing EOD</b>: el suelo sube con tu balance de cierre y, si el plan tiene trail lock, se bloquea al superarlo (🔒). Las que tienen daily loss limit se marcan aparte. Revisa las reglas exactas de cada firma con ⚙ Editar reglas.</div>`:''}
   `;
 }
 
@@ -813,6 +993,30 @@ function drawEquity(id, T){
     datasets:[{data:curve.map(p=>p.cum),borderColor:color,backgroundColor:grad,fill:true,tension:.25,pointRadius:0,borderWidth:2}]},
     options:chartBase()});
 }
+function drawCumulative(id, T){
+  const el=$('#'+id); if(!el) return;
+  const ch=[...T].sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0);
+  let cumR=0, wins=0, counted=0;
+  const wrPts=[], expPts=[];
+  ch.forEach((t,i)=>{
+    cumR+=(t.realizedR||0);
+    if(t.result!=='be'){ counted++; if(t.result==='win')wins++; }
+    wrPts.push(counted? wins/counted*100 : 0);
+    expPts.push(cumR/(i+1));
+  });
+  charts.cum=new Chart(el,{type:'line',
+    data:{labels:ch.map((p,i)=>i+1),datasets:[
+      {label:'Winrate %',data:wrPts,borderColor:'#4d9fff',backgroundColor:'transparent',tension:.25,pointRadius:0,borderWidth:2,yAxisID:'y'},
+      {label:'Expectancy R',data:expPts,borderColor:'#3ddc84',backgroundColor:'transparent',tension:.25,pointRadius:0,borderWidth:2,yAxisID:'y1'}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#161c27',borderColor:'#1f2733',borderWidth:1,titleColor:'#e8edf4',bodyColor:'#8a97a8',padding:10}},
+      scales:{
+        x:{grid:{color:'#1f2733'},ticks:{color:'#5a6573',font:{size:10}}},
+        y:{position:'left',grid:{color:'#1f2733'},ticks:{color:'#4d9fff',font:{size:10},callback:v=>v+'%'},min:0,max:100},
+        y1:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'#3ddc84',font:{size:10},callback:v=>v+'R'}}
+      }}});
+}
 function drawDistribution(id, T){
   const el=$('#'+id); if(!el) return;
   const buckets={'<-2R':0,'-2..-1':0,'-1..0':0,'0..1':0,'1..2':0,'>2R':0};
@@ -888,11 +1092,20 @@ function tradeModal(t){
     </div>
     <div class="field-row">
       <div class="field"><label>P&L real ($)</label><input type="number" id="f_pnl" value="${e.pnl??''}"></div>
-      <div class="field"><label>Resultado</label><select id="f_result">
-        <option value="win" ${e.result==='win'?'selected':''}>Win</option>
-        <option value="loss" ${e.result==='loss'?'selected':''}>Loss</option>
-        <option value="be" ${e.result==='be'?'selected':''}>Break-even</option>
+      <div class="field"><label>Resultado (a tu 1:1,5)</label><select id="f_result">
+        <option value="win" ${e.result==='win'?'selected':''}>TP (win)</option>
+        <option value="loss" ${e.result==='loss'?'selected':''}>SL (loss)</option>
+        <option value="be" ${e.result==='be'?'selected':''}>BE</option>
       </select></div>
+    </div>
+    <div class="field">
+      <label>¿Qué habría pasado a 1:1? <span class="hint">(¿el precio tocó tu +1R antes de resolverse?)</span></label>
+      <select id="f_result11">
+        <option value="" ${!e.result11?'selected':''}>— no registrado —</option>
+        <option value="win" ${e.result11==='win'?'selected':''}>TP a 1:1 (habría ganado +1R)</option>
+        <option value="loss" ${e.result11==='loss'?'selected':''}>SL a 1:1 (se fue al stop sin tocar 1R)</option>
+        <option value="be" ${e.result11==='be'?'selected':''}>BE a 1:1</option>
+      </select>
     </div>
     <div class="field"><label>Flags de ejecución (marca lo que pasó)</label>
       <div class="chips" id="f_flags">
@@ -1004,6 +1217,7 @@ function saveTrade(id){
     riskUSD:parseFloat($('#f_riskUSD').value)||0,
     pnl:parseFloat($('#f_pnl').value)|| ((isNaN(realizedR)?0:realizedR)*(parseFloat($('#f_riskUSD').value)||0)),
     result:$('#f_result').value,
+    result11:$('#f_result11').value,
     flags:[...flags],
     note:$('#f_note').value.trim(),
     images:[...($('#modalBg')._images||[])],
@@ -1033,20 +1247,26 @@ function openAccountModal(){ accountModal(); }
 function editAccount(id){ accountModal(DB.accounts.find(a=>a.id===id)); }
 function accountModal(a){
   const e=a||{};
-  const size=e.size||50000;
+  const firms=Object.keys(DB.firms||{});
+  const curFirm=e.firm||firms[0]||'LucidFlex';
+  const plans=DB.firms[curFirm]?Object.keys(DB.firms[curFirm].plans):[];
+  const curPlan=e.plan||plans[0]||'';
   $('#modalBg').innerHTML=`<div class="modal">
-    <h2>${a?'Editar cuenta':'Nueva cuenta LucidFlex'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
-    <div class="field-row">
-      <div class="field"><label>Nombre/alias</label><input id="a_name" value="${e.name||''}" placeholder="LucidFlex 50K #1"></div>
-      <div class="field"><label>Tamaño</label><select id="a_size" onchange="lucidPreview()">
-        ${[25000,50000,100000,150000].map(s=>`<option value="${s}" ${size===s?'selected':''}>${s/1000}K</option>`).join('')}
+    <h2>${a?'Editar cuenta':'Nueva cuenta'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field"><label>Nombre/alias</label><input id="a_name" value="${e.name||''}" placeholder="${curFirm} ${curPlan} #1"></div>
+    <div class="field-row-3">
+      <div class="field"><label>Firma</label><select id="a_firm" onchange="acctFirmChange()">
+        ${firms.map(f=>`<option ${curFirm===f?'selected':''}>${f}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Plan</label><select id="a_plan" onchange="acctPreview()">
+        ${plans.map(p=>`<option ${curPlan===p?'selected':''}>${p}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Fase</label><select id="a_phase" onchange="acctPreview()">
+        ${['Evaluación','Funded'].map(p=>`<option ${e.phase===p?'selected':''}>${p}</option>`).join('')}
       </select></div>
     </div>
-    <div class="field"><label>Fase</label><select id="a_phase">
-      ${['Evaluación','Funded'].map(p=>`<option ${e.phase===p?'selected':''}>${p}</option>`).join('')}
-    </select></div>
     <div class="calc-out" id="a_preview" style="margin-bottom:14px"></div>
-    <div class="hint">Las reglas (profit target, MLL, consistency, contratos) se cargan automáticamente desde las specs oficiales de LucidFlex. El balance actual se calcula con tus trades asignados.</div>
+    <div class="hint">¿Falta tu firma o un plan? Ve a <b>Cuentas → Editar reglas</b> para añadirlo. El balance se calcula con tus trades asignados.</div>
     <div class="modal-actions">
       ${a?`<button class="btn danger" onclick="deleteAccount('${a.id}')">Eliminar</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
@@ -1054,33 +1274,38 @@ function accountModal(a){
     </div>
   </div>`;
   $('#modalBg').classList.add('show');
-  lucidPreview();
+  acctPreview();
 }
-function lucidPreview(){
-  const size=+$('#a_size').value, s=LUCIDFLEX[size];
+function acctFirmChange(){
+  const firm=$('#a_firm').value;
+  const plans=DB.firms[firm]?Object.keys(DB.firms[firm].plans):[];
+  $('#a_plan').innerHTML=plans.map(p=>`<option>${p}</option>`).join('');
+  acctPreview();
+}
+function acctPreview(){
+  const firm=$('#a_firm').value, plan=$('#a_plan').value, phase=$('#a_phase').value;
+  const s=planSpec(firm,plan,phase);
+  if(!s){ $('#a_preview').innerHTML='<p class="hint">Plan sin reglas definidas.</p>'; return; }
   $('#a_preview').innerHTML=`<div class="grid g-2" style="gap:8px">
-    <div class="hint">Profit target: <b style="color:var(--ink)">${fmt$(s.profitTarget)}</b></div>
-    <div class="hint">MLL: <b style="color:var(--ink)">${fmt$(s.mll)}</b></div>
-    <div class="hint">Trail lock: <b style="color:var(--ink)">${fmt$(s.trailLock)}</b></div>
+    <div class="hint">Balance: <b style="color:var(--ink)">${fmt$(s.size)}</b></div>
+    <div class="hint">Drawdown (trailing EOD): <b style="color:var(--ink)">${fmt$(s.drawdown)}</b></div>
+    ${s.profitTarget?`<div class="hint">Profit target: <b style="color:var(--ink)">${fmt$(s.profitTarget)}</b></div>`:'<div class="hint">Sin profit target (funded)</div>'}
+    ${s.dailyLoss?`<div class="hint">Daily loss limit: <b style="color:var(--red)">${fmt$(s.dailyLoss)}</b></div>`:'<div class="hint">Sin daily loss limit</div>'}
     <div class="hint">Máx contratos: <b style="color:var(--ink)">${s.maxMicro} micros / ${s.maxMini} minis</b></div>
-    <div class="hint">Mín. profit/día: <b style="color:var(--ink)">${fmt$(s.minDailyProfit)}</b></div>
-    <div class="hint">Cap payout: <b style="color:var(--ink)">${fmt$(s.payoutCap)}</b></div>
+    ${s.consistency?`<div class="hint">Consistency: <b style="color:var(--ink)">${s.consistency}%</b></div>`:'<div class="hint">Sin consistency</div>'}
+    ${s.minDays?`<div class="hint">Mín. días: <b style="color:var(--ink)">${s.minDays}</b></div>`:''}
   </div>`;
 }
 function saveAccount(id){
-  const size=+$('#a_size').value, s=LUCIDFLEX[size];
+  const firm=$('#a_firm').value, plan=$('#a_plan').value, phase=$('#a_phase').value;
+  const s=planSpec(firm,plan,phase);
+  if(!s){ toast('Ese plan no tiene reglas definidas'); return; }
   const a={
     id:id||uid(),
-    name:$('#a_name').value.trim()||`LucidFlex ${size/1000}K`,
-    firm:'LucidFlex',
-    size,
-    startBalance:size,
-    maxDD:s.mll,
-    target:s.profitTarget,
-    ddType:'trailing',
-    trailLock:s.trailLock,
-    lockedMLL:s.lockedMLL,
-    phase:$('#a_phase').value
+    name:$('#a_name').value.trim()||`${firm} ${plan}`,
+    firm, plan, phase,
+    size:s.size,
+    startBalance:s.size
   };
   if(id){const i=DB.accounts.findIndex(x=>x.id===id);DB.accounts[i]=a;}
   else DB.accounts.push(a);
@@ -1092,6 +1317,116 @@ function deleteAccount(id){
 }
 
 function closeModal(){ $('#modalBg').classList.remove('show'); $('#modalBg').innerHTML=''; }
+
+/* ============================================================
+   EDITOR DE REGLAS DE FIRMAS
+   ============================================================ */
+let FE_FIRM=null, FE_PLAN=null;
+function openFirmEditor(){
+  const firms=Object.keys(DB.firms||{});
+  FE_FIRM=FE_FIRM&&DB.firms[FE_FIRM]?FE_FIRM:firms[0];
+  const plans=FE_FIRM?Object.keys(DB.firms[FE_FIRM].plans):[];
+  FE_PLAN=FE_PLAN&&plans.includes(FE_PLAN)?FE_PLAN:plans[0];
+  $('#modalBg').innerHTML=`<div class="modal" style="max-width:640px">
+    <h2>⚙ Editar reglas de firmas <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field-row">
+      <div class="field"><label>Firma</label><select id="fe_firm" onchange="feSelectFirm(this.value)">
+        ${firms.map(f=>`<option ${FE_FIRM===f?'selected':''}>${f}</option>`).join('')}
+      </select></div>
+      <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+        <button class="btn ghost sm" onclick="feAddFirm()">+ Firma</button>
+        ${firms.length>1?`<button class="btn danger sm" onclick="feDeleteFirm()">Borrar firma</button>`:''}
+      </div>
+    </div>
+    ${FE_FIRM?`
+    <div class="field-row">
+      <div class="field"><label>Plan</label><select id="fe_plan" onchange="feSelectPlan(this.value)">
+        ${plans.map(p=>`<option ${FE_PLAN===p?'selected':''}>${p}</option>`).join('')}
+      </select></div>
+      <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+        <button class="btn ghost sm" onclick="feAddPlan()">+ Plan</button>
+        ${plans.length>1?`<button class="btn danger sm" onclick="feDeletePlan()">Borrar plan</button>`:''}
+      </div>
+    </div>
+    <div id="fe_planForm">${FE_PLAN?fePlanForm():''}</div>
+    `:'<p class="hint">Añade una firma para empezar.</p>'}
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeModal()">Cerrar</button>
+      ${FE_PLAN?`<button class="btn primary" onclick="feSavePlan()">Guardar plan</button>`:''}
+    </div>
+  </div>`;
+  $('#modalBg').classList.add('show');
+}
+function fePlanForm(){
+  const p=DB.firms[FE_FIRM].plans[FE_PLAN];
+  const trailing=DB.firms[FE_FIRM].trailing||'eod';
+  const f=(phase,field,def=0)=> (p[phase]&&p[phase][field]!=null)?p[phase][field]:def;
+  const phaseFields=(phase,label)=>`
+    <div class="plan-box" style="margin-bottom:12px">
+      <div class="plan-title">${label}</div>
+      <div class="field-row-3">
+        <div class="field"><label>Profit target ($)</label><input type="number" id="fe_${phase}_profitTarget" value="${f(phase,'profitTarget')}"></div>
+        <div class="field"><label>Drawdown ($)</label><input type="number" id="fe_${phase}_drawdown" value="${f(phase,'drawdown')}"></div>
+        <div class="field"><label>Daily loss ($, 0=no)</label><input type="number" id="fe_${phase}_dailyLoss" value="${f(phase,'dailyLoss')}"></div>
+      </div>
+      <div class="field-row-3">
+        <div class="field"><label>Trail lock ($, 0=no)</label><input type="number" id="fe_${phase}_trailLock" value="${f(phase,'trailLock')}"></div>
+        <div class="field"><label>Suelo bloqueado ($)</label><input type="number" id="fe_${phase}_lockedFloor" value="${f(phase,'lockedFloor')}"></div>
+        <div class="field"><label>Consistency (%, 0=no)</label><input type="number" id="fe_${phase}_consistency" value="${f(phase,'consistency')}"></div>
+      </div>
+      <div class="field-row-3">
+        <div class="field"><label>Máx micros</label><input type="number" id="fe_${phase}_maxMicro" value="${f(phase,'maxMicro')}"></div>
+        <div class="field"><label>Máx minis</label><input type="number" id="fe_${phase}_maxMini" value="${f(phase,'maxMini')}"></div>
+        <div class="field"><label>Mín. días</label><input type="number" id="fe_${phase}_minDays" value="${f(phase,'minDays',1)}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Mín. profit/día ($)</label><input type="number" id="fe_${phase}_minDailyProfit" value="${f(phase,'minDailyProfit')}"></div>
+        <div class="field"><label>Cap payout ($, 0=no)</label><input type="number" id="fe_${phase}_payoutCap" value="${f(phase,'payoutCap')}"></div>
+      </div>
+    </div>`;
+  return `
+    <div class="field"><label>Balance del plan ($)</label><input type="number" id="fe_size" value="${p.size||0}"></div>
+    ${phaseFields('eval','FASE EVALUACIÓN')}
+    ${phaseFields('funded','FASE FUNDED')}
+    <div class="hint">Todas trailing EOD. Deja en 0 lo que no aplique (p.ej. sin daily loss, sin consistency, sin trail lock).</div>
+  `;
+}
+function feSelectFirm(name){ FE_FIRM=name; FE_PLAN=null; openFirmEditor(); }
+function feSelectPlan(name){ FE_PLAN=name; openFirmEditor(); }
+function feAddFirm(){
+  const name=prompt('Nombre de la firma nueva:');
+  if(!name) return;
+  if(DB.firms[name]){ toast('Ya existe'); return; }
+  DB.firms[name]={trailing:'eod',plans:{}};
+  FE_FIRM=name; FE_PLAN=null; save(); openFirmEditor();
+}
+function feDeleteFirm(){
+  if(!confirm(`¿Borrar la firma ${FE_FIRM} y todos sus planes?`))return;
+  delete DB.firms[FE_FIRM]; FE_FIRM=null; FE_PLAN=null; save(); openFirmEditor();
+}
+function feAddPlan(){
+  const name=prompt('Nombre del plan (ej. 50K, Starter 50K...):');
+  if(!name) return;
+  if(DB.firms[FE_FIRM].plans[name]){ toast('Ya existe'); return; }
+  const blank={profitTarget:0,drawdown:0,trailLock:0,lockedFloor:0,dailyLoss:0,maxMicro:0,maxMini:0,minDays:1,consistency:0,minDailyProfit:0,payoutCap:0};
+  DB.firms[FE_FIRM].plans[name]={size:0,eval:structuredClone(blank),funded:structuredClone(blank)};
+  FE_PLAN=name; save(); openFirmEditor();
+}
+function feDeletePlan(){
+  if(!confirm(`¿Borrar el plan ${FE_PLAN}?`))return;
+  delete DB.firms[FE_FIRM].plans[FE_PLAN]; FE_PLAN=null; save(); openFirmEditor();
+}
+function feSavePlan(){
+  const p=DB.firms[FE_FIRM].plans[FE_PLAN];
+  p.size=+$('#fe_size').value||0;
+  ['eval','funded'].forEach(phase=>{
+    p[phase]=p[phase]||{};
+    ['profitTarget','drawdown','dailyLoss','trailLock','lockedFloor','consistency','maxMicro','maxMini','minDays','minDailyProfit','payoutCap'].forEach(field=>{
+      p[phase][field]=+$(`#fe_${phase}_${field}`).value||0;
+    });
+  });
+  save(); toast('Plan guardado'); render();
+}
 
 /* ============================================================
    IMPORT / EXPORT
