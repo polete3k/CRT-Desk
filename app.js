@@ -615,6 +615,28 @@ function renderPerformance(v, T){
         `;
       })()}
     </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Análisis de cierres manuales</h3>
+      ${(()=>{
+        const manual=T.filter(t=>t.exitType==='manual');
+        const target=T.filter(t=>(t.exitType||'target')==='target' && t.result==='win');
+        if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro si cerrar antes te ayuda o te penaliza.</p>`;
+        // R medio dejado sobre la mesa: planificado - realizado en manuales ganadores
+        const manualWins=manual.filter(t=>t.result==='win');
+        let leftOnTable=0, cnt=0;
+        manualWins.forEach(t=>{ const d=(t.plannedR||0)-(t.realizedR||0); if(d>0){leftOnTable+=d;cnt++;} });
+        const avgManualR=expectancy(manual);
+        const avgTargetR=target.length?expectancy(target):0;
+        return `
+        <div class="grid g-3" style="gap:10px">
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CIERRES MANUALES</div><div class="big">${manual.length}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R MEDIO MANUAL</div><div class="big ${cls(avgManualR)}">${fmtR(avgManualR)}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R DEJADO EN LA MESA</div><div class="big neg">${cnt?'-'+fmt(leftOnTable,1)+'R':'—'}</div></div>
+        </div>
+        ${cnt?`<div class="insight warn" style="margin-top:14px">En ${cnt} cierres manuales ganadores dejaste <b>${fmt(leftOnTable,1)}R sin cobrar</b> respecto a tu objetivo. ${target.length?`Tus TP completos promedian ${fmtR(avgTargetR)} vs ${fmtR(avgManualR)} de los manuales.`:''} Si el precio solía llegar a tu TP, cerrar antes te está costando; si no, quizá tu instinto acierta. Míralo con el comparador de arriba.</div>`:`<div class="insight" style="margin-top:14px">Tus cierres manuales no dejaron R sin cobrar respecto al plan. Buen timing.</div>`}
+        `;
+      })()}
+    </div>
     <div class="card">
       <h3>Distribución de R por trade</h3>
       <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
@@ -1002,7 +1024,7 @@ function renderJournal(v, T){
           <td>${fmt(t.plannedR,1)}</td>
           <td class="${cls(t.realizedR)}">${fmtR(t.realizedR)}</td>
           <td class="${cls(t.pnl)}">${fmt$(t.pnl)}</td>
-          <td><span class="tag ${t.result==='win'?'ok':t.result==='loss'?'bad':'neutral'}">${t.result}</span></td>
+          <td><span class="tag ${t.result==='win'?'ok':t.result==='loss'?'bad':'neutral'}">${t.result==='win'?'Gan':t.result==='loss'?'Perd':'BE'}</span>${t.exitType==='manual'?' <span class="tag warn" title="cierre manual">✋</span>':''}</td>
           <td>${errs.length?errs.map(f=>`<span class="tag bad" style="margin:1px">${FLAG_LABELS[f]||f}</span>`).join(''):'<span class="tag ok">limpio</span>'}</td>
           <td><button class="btn ghost sm icon" onclick="editTrade('${t.id}')">✎</button></td>
         </tr>`;
@@ -1131,11 +1153,19 @@ function tradeModal(t){
     </div>
     <div class="field-row">
       <div class="field"><label>P&L real ($)</label><input type="number" id="f_pnl" value="${e.pnl??''}"></div>
-      <div class="field"><label>Resultado (a tu 1:1,5)</label><select id="f_result">
-        <option value="win" ${e.result==='win'?'selected':''}>TP (win)</option>
-        <option value="loss" ${e.result==='loss'?'selected':''}>SL (loss)</option>
+      <div class="field"><label>Resultado</label><select id="f_result">
+        <option value="win" ${e.result==='win'?'selected':''}>Ganador</option>
+        <option value="loss" ${e.result==='loss'?'selected':''}>Perdedor</option>
         <option value="be" ${e.result==='be'?'selected':''}>BE</option>
       </select></div>
+    </div>
+    <div class="field"><label>¿Cómo saliste?</label>
+      <select id="f_exitType">
+        <option value="target" ${(e.exitType||'target')==='target'?'selected':''}>TP completo (llegó a mi 1:1,5)</option>
+        <option value="manual" ${e.exitType==='manual'?'selected':''}>Cierre manual (cerré antes del objetivo)</option>
+        <option value="stop" ${e.exitType==='stop'?'selected':''}>SL (saltó el stop)</option>
+      </select>
+      <div class="hint" style="margin-top:5px">Lo que de verdad cuenta para tus métricas es el <b>R realizado</b> de arriba. Esto solo clasifica cómo cerraste.</div>
     </div>
     <div class="field">
       <label>¿Qué habría pasado a 1:1? <span class="hint">(¿el precio tocó tu +1R antes de resolverse?)</span></label>
@@ -1256,6 +1286,7 @@ function saveTrade(id){
     riskUSD:parseFloat($('#f_riskUSD').value)||0,
     pnl:parseFloat($('#f_pnl').value)|| ((isNaN(realizedR)?0:realizedR)*(parseFloat($('#f_riskUSD').value)||0)),
     result:$('#f_result').value,
+    exitType:$('#f_exitType').value,
     result11:$('#f_result11').value,
     flags:[...flags],
     note:$('#f_note').value.trim(),
