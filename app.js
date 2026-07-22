@@ -637,6 +637,31 @@ function renderPerformance(v, T){
         `;
       })()}
     </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>¿Llega el precio a tu DOL final?</h3>
+      ${(()=>{
+        const withDol=T.filter(t=>t.dolReached==='yes'||t.dolReached==='no');
+        const withMfe=T.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
+        if(withDol.length<3 && withMfe.length<3) return `<p class="hint">Registra "¿Llegó al DOL final?" y el R máximo (MFE) en tus trades. Con 3+ te muestro si el precio suele llegar a tu DOL o se queda en objetivos intermedios.</p>`;
+        const reached=withDol.filter(t=>t.dolReached==='yes').length;
+        const dolPct=withDol.length?reached/withDol.length*100:0;
+        const avgMfe=withMfe.length?withMfe.reduce((s,t)=>s+t.mfe,0)/withMfe.length:0;
+        // MFE medio cuando NO llegó al DOL: ¿dónde se suele quedar?
+        const noReach=withMfe.filter(t=>t.dolReached==='no');
+        const avgMfeNoReach=noReach.length?noReach.reduce((s,t)=>s+t.mfe,0)/noReach.length:0;
+        return `
+        <div class="grid g-3" style="gap:10px">
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">LLEGA AL DOL FINAL</div><div class="big ${dolPct>=50?'pos':'neg'}">${fmt(dolPct,0)}%</div><div class="hint" style="margin-top:4px">${reached}/${withDol.length} trades</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">MFE MEDIO</div><div class="big">${fmt(avgMfe,1)}R</div><div class="hint" style="margin-top:4px">hasta dónde llega el precio</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">SE QUEDA EN (si no llega)</div><div class="big">${noReach.length?fmt(avgMfeNoReach,1)+'R':'—'}</div><div class="hint" style="margin-top:4px">objetivo intermedio típico</div></div>
+        </div>
+        <div class="insight ${dolPct>=50?'':'warn'}" style="margin-top:14px">${dolPct>=50
+          ? `El precio llega a tu DOL final el <b>${fmt(dolPct,0)}%</b> de las veces. Aguantar hasta el DOL te compensa — tu paciencia tiene premio.`
+          : `El precio solo llega al DOL final el <b>${fmt(dolPct,0)}%</b> de las veces. ${noReach.length?`Cuando no llega, suele quedarse sobre ${fmt(avgMfeNoReach,1)}R.`:''} Plantéate asegurar parte en objetivos intermedios (altos de 1h/2h) en vez de esperar siempre al DOL.`}</div>
+        <div class="hint" style="margin-top:8px">Basado en ${withDol.length} trades con DOL registrado y ${withMfe.length} con MFE.</div>
+        `;
+      })()}
+    </div>
     <div class="card">
       <h3>Distribución de R por trade</h3>
       <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
@@ -1176,6 +1201,19 @@ function tradeModal(t){
         <option value="be" ${e.result11==='be'?'selected':''}>BE a 1:1</option>
       </select>
     </div>
+    <div class="field-row">
+      <div class="field"><label>¿Llegó al DOL final?</label>
+        <select id="f_dolReached">
+          <option value="" ${!e.dolReached?'selected':''}>— no registrado —</option>
+          <option value="yes" ${e.dolReached==='yes'?'selected':''}>Sí, llegó al DOL final</option>
+          <option value="no" ${e.dolReached==='no'?'selected':''}>No, se quedó corto</option>
+        </select>
+      </div>
+      <div class="field"><label>R máximo alcanzado (MFE) <span class="hint">a favor</span></label>
+        <input type="number" id="f_mfe" step="0.1" value="${e.mfe??''}" placeholder="ex. 2.3">
+      </div>
+    </div>
+    <div class="hint" style="margin:-6px 0 12px">MFE = hasta qué R se movió el precio a tu favor, aunque no lo cobraras. Sirve para ver a la larga si el precio suele llegar a tu DOL o se queda en objetivos intermedios.</div>
     <div class="field"><label>Flags de ejecución (marca lo que pasó)</label>
       <div class="chips" id="f_flags">
         ${Object.entries(FLAG_LABELS).map(([k,l])=>`<button type="button" class="chip ${flags.includes(k)?(k==='clean'?'on good':'on'):''}" data-flag="${k}" onclick="toggleFlag('${k}')">${l}</button>`).join('')}
@@ -1288,6 +1326,8 @@ function saveTrade(id){
     result:$('#f_result').value,
     exitType:$('#f_exitType').value,
     result11:$('#f_result11').value,
+    dolReached:$('#f_dolReached').value,
+    mfe:parseFloat($('#f_mfe').value),
     flags:[...flags],
     note:$('#f_note').value.trim(),
     images:[...($('#modalBg')._images||[])],
