@@ -184,6 +184,46 @@ function profitFactor(trades){
 function totalR(trades){ return trades.reduce((s,t)=>s+(t.realizedR||0),0); }
 function totalPnl(trades){ return trades.reduce((s,t)=>s+(t.pnl||0),0); }
 
+// Rachas de victorias/derrotas (en orden cronológico). BE no rompe racha, la ignora.
+function streaks(trades){
+  const ch=[...trades].sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0);
+  let maxWin=0, maxLoss=0, curW=0, curL=0, curType=null, curCount=0;
+  ch.forEach(t=>{
+    if(t.result==='win'){ curW++; maxWin=Math.max(maxWin,curW); curL=0; }
+    else if(t.result==='loss'){ curL++; maxLoss=Math.max(maxLoss,curL); curW=0; }
+    // be: no toca las rachas
+  });
+  // racha actual: recorrer desde el final
+  for(let i=ch.length-1;i>=0;i--){
+    const r=ch[i].result;
+    if(r==='be') continue;
+    if(curType===null){ curType=r; curCount=1; }
+    else if(r===curType){ curCount++; }
+    else break;
+  }
+  return { maxWin, maxLoss, curType, curCount };
+}
+
+// Día de la semana cruzado con disciplina: expectancy + tasa de errores por día
+function dayDisciplineBreakdown(trades){
+  const names=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  const map={};
+  trades.forEach(t=>{
+    const [yy,mm,dd]=t.date.split('-').map(Number);
+    const wd=new Date(yy,mm-1,dd).getDay();
+    const k=names[wd];
+    map[k]=map[k]||[];
+    map[k].push(t);
+  });
+  // orden lun-vie-sáb-dom
+  const order=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+  return order.filter(k=>map[k]).map(k=>{
+    const ts=map[k];
+    const errRate = ts.length? ts.filter(t=>(t.flags||[]).some(f=>f!=='clean')).length/ts.length*100 : 0;
+    return { key:k, n:ts.length, exp:expectancy(ts), wr:winrate(ts), errRate };
+  });
+}
+
 /* ---------- Comparador de R:R ----------
    Simula el resultado de cada trade bajo un ratio dado.
    - Escenario real (1:1,5): usa realizedR tal cual.
@@ -578,9 +618,8 @@ function renderPerformance(v, T){
       <div class="card"><h3>Por sesión</h3>${breakdownTable(breakdown(T,'session'))}</div>
       <div class="card"><h3>Por símbolo</h3>${breakdownTable(breakdown(T,'symbol'))}</div>
     </div>
-    <div class="grid g-2" style="margin-bottom:14px">
-      <div class="card"><h3>Por día de la semana</h3>${breakdownTable(breakdown(T,'weekday'))}</div>
-      <div class="card"><h3>Por setup</h3>${breakdownTable(breakdown(T,'setup'))}</div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Por setup</h3>${breakdownTable(breakdown(T,'setup'))}
     </div>
     <div class="card" style="margin-bottom:14px">
       <h3>Comparador de R:R — tu 1:1,5 vs 1:1</h3>
@@ -665,6 +704,42 @@ function renderPerformance(v, T){
     <div class="card">
       <h3>Distribución de R por trade</h3>
       <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
+    </div>
+
+    <div class="grid g-2" style="margin-top:14px">
+      <div class="card">
+        <h3>Rachas</h3>
+        ${(()=>{
+          const s=streaks(T);
+          const curLabel = s.curType==='win'?`${s.curCount} victoria${s.curCount>1?'s':''} 🔥`:s.curType==='loss'?`${s.curCount} derrota${s.curCount>1?'s':''}`:'—';
+          return `<div class="grid g-3" style="gap:10px">
+            <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">RACHA ACTUAL</div><div class="big ${s.curType==='win'?'pos':s.curType==='loss'?'neg':''}">${curLabel}</div></div>
+            <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">RÉCORD VICTORIAS</div><div class="big pos">${s.maxWin}</div></div>
+            <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">RÉCORD DERROTAS</div><div class="big neg">${s.maxLoss}</div></div>
+          </div>
+          ${s.maxLoss>0?`<div class="insight" style="margin-top:14px">Tu peor racha histórica fueron <b>${s.maxLoss} derrotas seguidas</b>. Tenerlo presente ayuda: cuando encadenes pérdidas, sabrás que ya lo has superado antes sin que te hundiera.</div>`:''}`;
+        })()}
+      </div>
+      <div class="card">
+        <h3>Día de la semana + disciplina</h3>
+        ${(()=>{
+          const rows=dayDisciplineBreakdown(T);
+          if(!rows.length) return '<p class="hint">Sin datos suficientes.</p>';
+          const best=[...rows].sort((a,b)=>b.exp-a.exp)[0];
+          const worst=[...rows].sort((a,b)=>a.exp-b.exp)[0];
+          return `<div class="table-wrap" style="border:none"><table style="min-width:auto">
+            <thead><tr><th>Día</th><th>N</th><th>Exp</th><th>WR</th><th>% error</th></tr></thead>
+            <tbody>${rows.map(r=>`<tr>
+              <td style="font-family:var(--sans);font-weight:600">${r.key}</td>
+              <td>${r.n}</td>
+              <td class="${cls(r.exp)}">${fmtR(r.exp)}</td>
+              <td>${fmt(r.wr,0)}%</td>
+              <td class="${r.errRate>30?'neg':r.errRate>0?'':'pos'}">${fmt(r.errRate,0)}%</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+          ${rows.length>=2?`<div class="insight" style="margin-top:12px">Mejor día: <b>${best.key}</b> (${fmtR(best.exp)}). Peor: <b>${worst.key}</b> (${fmtR(worst.exp)}${worst.errRate>30?`, con ${fmt(worst.errRate,0)}% de trades con error`:''}). ${worst.errRate>30?'Si el peor día coincide con más errores, quizá el problema eres tú ese día, no el mercado.':''}</div>`:''}`;
+        })()}
+      </div>
     </div>
   `;
   drawDistribution('distChart', T);
