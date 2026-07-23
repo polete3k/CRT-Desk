@@ -193,6 +193,10 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 .plan-count{font-size:11px;font-family:var(--mono);color:var(--ink-faint);margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
 
 /* ---------- Phase filter ---------- */
+.cal-cell.notrade{background:rgba(138,151,168,.07);border-color:var(--line);border-style:dashed}
+.cal-cell .nt-mark{font-size:15px;margin-top:auto;opacity:.55}
+.cal-cell .nt-reason{font-size:8px;color:var(--ink-faint);line-height:1.2}
+@media(max-width:560px){.cal-cell .nt-reason{display:none}}
 .phase-filter{display:inline-flex;gap:3px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:4px;margin-bottom:18px}
 .phase-btn{background:transparent;border:none;color:var(--ink-dim);font-family:var(--sans);font-size:13px;font-weight:600;padding:7px 15px;border-radius:8px;cursor:pointer;transition:.14s;display:flex;align-items:center;gap:6px}
 .phase-btn:hover{color:var(--ink)}
@@ -214,6 +218,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
     <div class="topbar-actions">
       <button class="btn ghost sm icon" id="exportBtn" title="Exportar datos">⤓</button>
       <button class="btn ghost sm icon" id="importBtn" title="Importar datos">⤒</button>
+      <button class="btn ghost sm" id="noTradeBtn" title="Registrar dia sense trade">🚫 Sense trade</button>
       <button class="btn primary sm" id="addTradeBtn">+ Trade</button>
     </div>
   </header>

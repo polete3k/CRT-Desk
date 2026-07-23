@@ -71,9 +71,20 @@ const FIRM_PRESETS = {
 const DEFAULTS = {
   trades: [],
   accounts: [],
+  noTradeDays: [],   // {id, date, reason, note}
   firms: null,   // se inicializa desde FIRM_PRESETS la primera vez (así el usuario puede editarlas)
   settings: { riskPerTradePct: 25 },
   meta: { created: Date.now() }
+};
+
+// Motius de dia sense trade
+const NOTRADE_REASONS = {
+  no_setup:'No hi havia setup vàlid',
+  no_time:'No vaig poder mirar el mercat',
+  rest:'Descans / dia off',
+  news:'Notícies o mercat impredictible',
+  stop_done:'Ja havia fet el meu stop del dia',
+  other:'Altres'
 };
 
 let DB = load();
@@ -357,7 +368,8 @@ function render(){
   // pestañas donde el filtro eval/funded tiene sentido
   const metricTabs=['overview','discipline','performance'];
   const showFilter = metricTabs.includes(CURRENT_TAB);
-  if(CURRENT_TAB!=='accounts' && CURRENT_TAB!=='capital' && !T.length){
+  const hasNoTrade=(DB.noTradeDays||[]).length>0;
+  if(CURRENT_TAB!=='accounts' && CURRENT_TAB!=='capital' && !T.length && !(CURRENT_TAB==='calendar'&&hasNoTrade)){
     v.innerHTML = (showFilter?phaseFilterBar():'') + emptyState();
     return;
   }
@@ -1026,10 +1038,13 @@ function renderCalendar(v, T){
   const dows=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
   let cells='';
   for(let i=0;i<startDow;i++) cells+=`<div class="cal-cell empty"></div>`;
+  const ntByDate={};
+  (DB.noTradeDays||[]).forEach(n=>{ ntByDate[n.date]=n; });
   for(let day=1;day<=daysInMonth;day++){
     const d=byDay[day];
     const dateStr=`${CAL_YEAR}-${String(CAL_MONTH+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const isToday=dateStr===todayStr;
+    const nt=ntByDate[dateStr];
     if(d){
       const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
       cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
@@ -1037,6 +1052,12 @@ function renderCalendar(v, T){
         ${d.dirty?'<div class="flag-dot" title="día con error"></div>':''}
         <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
         <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
+      </div>`;
+    } else if(nt){
+      cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${nt.id}')" title="${NOTRADE_REASONS[nt.reason]||''}">
+        <div class="daynum">${day}</div>
+        <div class="nt-mark">🚫</div>
+        <div class="meta nt-reason">${(NOTRADE_REASONS[nt.reason]||'').split(' ').slice(0,2).join(' ')}</div>
       </div>`;
     } else {
       cells+=`<div class="cal-cell ${isToday?'today':''}"><div class="daynum">${day}</div></div>`;
@@ -1058,8 +1079,17 @@ function renderCalendar(v, T){
       <div class="s"><span class="k">Días verdes</span><span class="v pos">${greenDays}</span></div>
       <div class="s"><span class="k">Días rojos</span><span class="v neg">${redDays}</span></div>
       <div class="s"><span class="k">Días operados</span><span class="v">${monthDays.length}</span></div>
+      ${(()=>{
+        const ntMonth=(DB.noTradeDays||[]).filter(n=>{
+          const [yy,mm]=n.date.split('-').map(Number);
+          return yy===CAL_YEAR && (mm-1)===CAL_MONTH;
+        });
+        if(!ntMonth.length) return '';
+        const noSetup=ntMonth.filter(n=>n.reason==='no_setup').length;
+        return `<div class="s"><span class="k">Sin trade</span><span class="v" style="color:var(--ink-dim)">${ntMonth.length}${noSetup?` <span style="font-size:11px;color:var(--ink-faint)">(${noSetup} sin setup)</span>`:''}</span></div>`;
+      })()}
     </div>
-    <div class="hint" style="margin-top:14px">Toca un día para ver el detalle de sus trades. El punto rojo marca días con algún error de ejecución.</div>
+    <div class="hint" style="margin-top:14px">Toca un día para ver el detalle. 🚫 = día sin trade (toca para editarlo). El punto rojo marca días con algún error de ejecución.</div>
   `;
 }
 
@@ -1219,6 +1249,49 @@ const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL
 const SESSIONS=['Londres','NY','Asia','Overlap'];
 
 function openTradeModal(){ tradeModal(); }
+
+/* ---------- Dia sense trade ---------- */
+function openNoTradeModal(existing){
+  const e=existing||{};
+  $('#modalBg').innerHTML=`<div class="modal">
+    <h2>${existing?'Editar dia sense trade':'Dia sense trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field"><label>Data</label><input type="date" id="nt_date" value="${e.date||todayISO()}"></div>
+    <div class="field"><label>Motiu</label>
+      <select id="nt_reason">
+        ${Object.entries(NOTRADE_REASONS).map(([k,l])=>`<option value="${k}" ${e.reason===k?'selected':''}>${l}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Nota (opcional)</label><textarea id="nt_note" rows="2" placeholder="Què vas veure? Per què vas decidir no entrar?">${e.note||''}</textarea></div>
+    <div class="insight" style="margin-top:4px">Registrar els dies que no operes també és disciplina. Si el motiu és "no hi havia setup", és paciència ben feta.</div>
+    <div class="modal-actions">
+      ${existing?`<button class="btn danger" onclick="deleteNoTrade('${existing.id}')">Eliminar</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">Cancel·lar</button>
+      <button class="btn primary" onclick="saveNoTrade('${existing?existing.id:''}')">Guardar</button>
+    </div>
+  </div>`;
+  $('#modalBg').classList.add('show');
+}
+function saveNoTrade(id){
+  const date=$('#nt_date').value;
+  if(!date){ toast('Posa una data'); return; }
+  // evitar duplicat de data
+  const dup=(DB.noTradeDays||[]).find(d=>d.date===date && d.id!==id);
+  if(dup){ toast('Ja tens un registre per aquest dia'); return; }
+  const nt={ id:id||uid(), date, reason:$('#nt_reason').value, note:$('#nt_note').value.trim() };
+  DB.noTradeDays=DB.noTradeDays||[];
+  if(id){ const i=DB.noTradeDays.findIndex(d=>d.id===id); DB.noTradeDays[i]=nt; }
+  else DB.noTradeDays.push(nt);
+  save(); closeModal(); render(); toast(id?'Actualitzat':'Dia sense trade registrat');
+}
+function deleteNoTrade(id){
+  if(!confirm('Eliminar aquest registre?'))return;
+  DB.noTradeDays=(DB.noTradeDays||[]).filter(d=>d.id!==id);
+  save(); closeModal(); render(); toast('Eliminat');
+}
+function editNoTrade(id){
+  const nt=(DB.noTradeDays||[]).find(d=>d.id===id);
+  if(nt) openNoTradeModal(nt);
+}
 function editTrade(id){ tradeModal(DB.trades.find(t=>t.id===id)); }
 
 function tradeModal(t){
@@ -1645,6 +1718,7 @@ function init(){
     CURRENT_TAB=tab.dataset.tab; render();
   });
   $('#addTradeBtn').onclick=openTradeModal;
+  $('#noTradeBtn').onclick=()=>openNoTradeModal();
   $('#fab').onclick=openTradeModal;
   $('#exportBtn').onclick=exportData;
   $('#importBtn').onclick=()=>$('#fileInput').click();
