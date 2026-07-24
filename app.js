@@ -1321,17 +1321,14 @@ function tradeModal(t){
     </div>
     <div class="field"><label>Cuenta</label><select id="f_account"><option value="">— sin asignar —</option>${DB.accounts.map(a=>`<option ${e.account===a.name?'selected':''}>${a.name}</option>`).join('')}</select></div>
     <div class="field-row-3">
-      <div class="field"><label>R planificado</label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??2}"></div>
-      <div class="field"><label>R realizado</label><input type="number" id="f_realizedR" step="0.1" value="${e.realizedR??''}"></div>
-      <div class="field"><label>Riesgo ($)</label><input type="number" id="f_riskUSD" value="${e.riskUSD??200}"></div>
+      <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
+      <div class="field"><label>R realizado <span class="hint">lo que sacaste</span></label><input type="number" id="f_realizedR" step="0.1" value="${e.realizedR??''}" oninput="onRealizedRChange()" placeholder="-1 / 0 / 1.5"></div>
+      <div class="field"><label>Riesgo ($)</label><input type="number" id="f_riskUSD" value="${e.riskUSD??200}" oninput="onRealizedRChange()"></div>
     </div>
-    <div class="field-row">
-      <div class="field"><label>P&L real ($)</label><input type="number" id="f_pnl" value="${e.pnl??''}"></div>
-      <div class="field"><label>Resultado</label><select id="f_result" onchange="toggleDolField()">
-        <option value="win" ${e.result==='win'?'selected':''}>Ganador</option>
-        <option value="loss" ${e.result==='loss'?'selected':''}>Perdedor</option>
-        <option value="be" ${e.result==='be'?'selected':''}>BE</option>
-      </select></div>
+    <div class="calc-out" id="f_resultPreview" style="margin-bottom:14px;padding:12px 14px"></div>
+    <div class="hint" style="margin:-8px 0 14px">El <b>R planificado</b> es tu objetivo al entrar. Sirve para medir cuánto dejas sobre la mesa cuando cierras antes o te saltas el plan — es la base del "coste de la indisciplina".</div>
+    <div class="field"><label>P&L real ($) <span class="hint">se calcula solo, edítalo si el broker dio otra cifra</span></label>
+      <input type="number" id="f_pnl" value="${e.pnl??''}" placeholder="auto">
     </div>
     <div class="field"><label>¿Cómo saliste?</label>
       <select id="f_exitType">
@@ -1393,18 +1390,57 @@ function tradeModal(t){
   };
   $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',updatePlanCount));
   updatePlanCount();
+  onRealizedRChange();
+}
+
+// Deduce el resultado a partir del R realizado (single source of truth)
+function resultFromR(r){
+  if(r==null||isNaN(r)) return null;
+  if(r>0) return 'win';
+  if(r<0) return 'loss';
+  return 'be';
+}
+
+function onRealizedRChange(){
+  const r=parseFloat($('#f_realizedR')?.value);
+  const risk=parseFloat($('#f_riskUSD')?.value)||0;
+  const res=resultFromR(r);
+  // preview del resultado deducido
+  const prev=$('#f_resultPreview');
+  if(prev){
+    if(res===null){
+      prev.innerHTML=`<span class="hint">Introduce el R realizado. <b>-1</b> = SL completo · <b>0</b> = break-even · <b>+1.5</b> = TP a 1:1,5</span>`;
+    } else {
+      const label=res==='win'?'GANADOR':res==='loss'?'PERDEDOR':'BREAK-EVEN';
+      const color=res==='win'?'var(--green)':res==='loss'?'var(--red)':'var(--ink-dim)';
+      const pnlCalc=r*risk;
+      prev.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <span style="font-weight:700;color:${color};font-size:13px;letter-spacing:.03em">${label}</span>
+        <span class="hint">${fmtR(r)} × ${fmt$(risk)} = <b style="color:${color}">${fmt$(pnlCalc)}</b></span>
+      </div>`;
+    }
+  }
+  // autorellenar P&L si está vacío o si coincidía con el cálculo anterior
+  const pnlEl=$('#f_pnl');
+  if(pnlEl && res!==null){
+    if(pnlEl.value==='' || pnlEl.dataset.auto==='1'){
+      pnlEl.value=(r*risk).toFixed(2);
+      pnlEl.dataset.auto='1';
+    }
+  }
   toggleDolField();
 }
 
-// Amaga el camp del DOL quan el resultat és perdedor (un SL mai arriba al DOL,
+// Amaga el camp del DOL quan el trade és perdedor (un SL mai arriba al DOL,
 // així que registrar-ho embrutaria l'estadística sense aportar res)
 function toggleDolField(){
-  const res=$('#f_result')?.value;
+  const r=parseFloat($('#f_realizedR')?.value);
+  const res=resultFromR(r);
   const wrap=$('#f_dolWrap');
   if(!wrap) return;
   if(res==='loss'){
     wrap.style.display='none';
-    const sel=$('#f_dolReached'); if(sel) sel.value='';   // netejar per no guardar valor
+    const sel=$('#f_dolReached'); if(sel) sel.value='';
   } else {
     wrap.style.display='';
   }
@@ -1487,7 +1523,7 @@ function saveTrade(id){
     realizedR:isNaN(realizedR)?0:realizedR,
     riskUSD:parseFloat($('#f_riskUSD').value)||0,
     pnl:parseFloat($('#f_pnl').value)|| ((isNaN(realizedR)?0:realizedR)*(parseFloat($('#f_riskUSD').value)||0)),
-    result:$('#f_result').value,
+    result:resultFromR(realizedR)||'be',
     exitType:$('#f_exitType').value,
     result11:$('#f_result11').value,
     dolReached:$('#f_dolReached').value,
