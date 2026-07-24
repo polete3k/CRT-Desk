@@ -691,7 +691,8 @@ function renderPerformance(v, T){
     <div class="card" style="margin-bottom:14px">
       <h3>¿Llega el precio a tu DOL final?</h3>
       ${(()=>{
-        const withDol=T.filter(t=>t.dolReached==='yes'||t.dolReached==='no');
+        // Els SL s'exclouen: un stop mai arriba al DOL, comptar-los distorsiona el %
+        const withDol=T.filter(t=>(t.dolReached==='yes'||t.dolReached==='no') && t.result!=='loss');
         const withMfe=T.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
         if(withDol.length<3 && withMfe.length<3) return `<p class="hint">Registra "¿Llegó al DOL final?" y el R máximo (MFE) en tus trades. Con 3+ te muestro si el precio suele llegar a tu DOL o se queda en objetivos intermedios.</p>`;
         const reached=withDol.filter(t=>t.dolReached==='yes').length;
@@ -707,9 +708,9 @@ function renderPerformance(v, T){
           <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">SE QUEDA EN (si no llega)</div><div class="big">${noReach.length?fmt(avgMfeNoReach,1)+'R':'—'}</div><div class="hint" style="margin-top:4px">objetivo intermedio típico</div></div>
         </div>
         <div class="insight ${dolPct>=50?'':'warn'}" style="margin-top:14px">${dolPct>=50
-          ? `El precio llega a tu DOL final el <b>${fmt(dolPct,0)}%</b> de las veces. Aguantar hasta el DOL te compensa — tu paciencia tiene premio.`
-          : `El precio solo llega al DOL final el <b>${fmt(dolPct,0)}%</b> de las veces. ${noReach.length?`Cuando no llega, suele quedarse sobre ${fmt(avgMfeNoReach,1)}R.`:''} Plantéate asegurar parte en objetivos intermedios (altos de 1h/2h) en vez de esperar siempre al DOL.`}</div>
-        <div class="hint" style="margin-top:8px">Basado en ${withDol.length} trades con DOL registrado y ${withMfe.length} con MFE.</div>
+          ? `De los trades que no acabaron en stop, el precio llega a tu DOL final el <b>${fmt(dolPct,0)}%</b> de las veces. Aguantar hasta el DOL te compensa — tu paciencia tiene premio.`
+          : `De los trades que no acabaron en stop, el precio solo llega al DOL final el <b>${fmt(dolPct,0)}%</b> de las veces. ${noReach.length?`Cuando no llega, suele quedarse sobre ${fmt(avgMfeNoReach,1)}R.`:''} Plantéate asegurar parte en objetivos intermedios (altos de 1h/2h) en vez de esperar siempre al DOL.`}</div>
+        <div class="hint" style="margin-top:8px">Basado en ${withDol.length} trades no perdedores con DOL registrado y ${withMfe.length} con MFE. Los SL se excluyen del % (nunca llegan al DOL), pero su MFE sí cuenta.</div>
         `;
       })()}
     </div>
@@ -1326,7 +1327,7 @@ function tradeModal(t){
     </div>
     <div class="field-row">
       <div class="field"><label>P&L real ($)</label><input type="number" id="f_pnl" value="${e.pnl??''}"></div>
-      <div class="field"><label>Resultado</label><select id="f_result">
+      <div class="field"><label>Resultado</label><select id="f_result" onchange="toggleDolField()">
         <option value="win" ${e.result==='win'?'selected':''}>Ganador</option>
         <option value="loss" ${e.result==='loss'?'selected':''}>Perdedor</option>
         <option value="be" ${e.result==='be'?'selected':''}>BE</option>
@@ -1350,7 +1351,7 @@ function tradeModal(t){
       </select>
     </div>
     <div class="field-row">
-      <div class="field"><label>¿Llegó al DOL final?</label>
+      <div class="field" id="f_dolWrap"><label>¿Llegó al DOL final?</label>
         <select id="f_dolReached">
           <option value="" ${!e.dolReached?'selected':''}>— no registrado —</option>
           <option value="yes" ${e.dolReached==='yes'?'selected':''}>Sí, llegó al DOL final</option>
@@ -1361,7 +1362,7 @@ function tradeModal(t){
         <input type="number" id="f_mfe" step="0.1" value="${e.mfe??''}" placeholder="ex. 2.3">
       </div>
     </div>
-    <div class="hint" style="margin:-6px 0 12px">MFE = hasta qué R se movió el precio a tu favor, aunque no lo cobraras. Sirve para ver a la larga si el precio suele llegar a tu DOL o se queda en objetivos intermedios.</div>
+    <div class="hint" style="margin:-6px 0 12px">MFE = hasta qué R se movió el precio a tu favor, aunque no lo cobraras. <b>En un SL también importa</b>: te dice si acertaste dirección pero te sacaron, o si la entrada estaba mal.</div>
     <div class="field"><label>Flags de ejecución (marca lo que pasó)</label>
       <div class="chips" id="f_flags">
         ${Object.entries(FLAG_LABELS).map(([k,l])=>`<button type="button" class="chip ${flags.includes(k)?(k==='clean'?'on good':'on'):''}" data-flag="${k}" onclick="toggleFlag('${k}')">${l}</button>`).join('')}
@@ -1392,6 +1393,21 @@ function tradeModal(t){
   };
   $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',updatePlanCount));
   updatePlanCount();
+  toggleDolField();
+}
+
+// Amaga el camp del DOL quan el resultat és perdedor (un SL mai arriba al DOL,
+// així que registrar-ho embrutaria l'estadística sense aportar res)
+function toggleDolField(){
+  const res=$('#f_result')?.value;
+  const wrap=$('#f_dolWrap');
+  if(!wrap) return;
+  if(res==='loss'){
+    wrap.style.display='none';
+    const sel=$('#f_dolReached'); if(sel) sel.value='';   // netejar per no guardar valor
+  } else {
+    wrap.style.display='';
+  }
 }
 
 // Comprime una imagen a max 1000px lado mayor, JPEG 0.7 (~100-200KB)
