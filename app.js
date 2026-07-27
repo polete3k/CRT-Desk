@@ -1236,14 +1236,14 @@ const FLAG_LABELS={
   oversized:'Sobre-dimensioné',
   bad_analysis:'Error de análisis'
 };
-// Plan de trading — checklist que aparece al registrar (en catalán, como lo definió Pol)
+// Plan de trading — checklist que aparece al registrar
 const PLAN_CHECKLIST=[
-  'Tenir el DOL clar i anar només a favor del DOL (Innegociable)',
-  'SL on s\u2019invalidi el trade',
-  'Tenir rangs LTF (8h-2h) a favor',
-  'No tenir rang contrari important a prop',
-  'Tend\u00e8ncia a favor',
-  '1 SL per compte per dia'
+  'Tener el DOL claro e ir solo a favor del DOL (Innegociable)',
+  'SL donde se invalide el trade',
+  'Tener rangos LTF (8h-2h) a favor',
+  'No tener rango contrario importante cerca',
+  'Tendencia a favor',
+  '1 SL por cuenta por día'
 ];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
@@ -1302,7 +1302,7 @@ function tradeModal(t){
   $('#modalBg').innerHTML=`<div class="modal">
     <h2>${t?'Editar trade':'Nuevo trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
     <div class="plan-box">
-      <div class="plan-title">📋 Pla de trading — checklist abans d'entrar</div>
+      <div class="plan-title">📋 Plan de trading — checklist antes de entrar</div>
       <div id="f_plan">
         ${PLAN_CHECKLIST.map((rule,i)=>`<label class="plan-item">
           <input type="checkbox" data-plan="${i}" ${planChecked.includes(i)?'checked':''}>
