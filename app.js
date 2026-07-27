@@ -266,6 +266,30 @@ function scenarioStats(trades, mode){
   };
 }
 
+/* ---------- R:R óptimo según MFE ----------
+   Para cada nivel de TP simula: si el MFE del trade >= TP -> habría cobrado ese TP (+TP R).
+   Si no -> el trade se habría ido al SL (-1R), asumiendo SL fijo de -1R.
+   Devuelve la expectancy de cada nivel y cuál es el óptimo. */
+function optimalRR(trades){
+  const withMfe = trades.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
+  if(withMfe.length<5) return { enough:false, n:withMfe.length };
+  const levels=[0.5,1,1.5,2,2.5,3,3.5,4];
+  const curve = levels.map(tp=>{
+    let sumR=0, wins=0;
+    withMfe.forEach(t=>{
+      if(t.mfe>=tp){ sumR+=tp; wins++; }   // el precio alcanzó este TP
+      else sumR+=-1;                         // no llegó -> SL
+    });
+    return { tp, exp:sumR/withMfe.length, wr:wins/withMfe.length*100 };
+  });
+  const best = curve.reduce((a,b)=> b.exp>a.exp?b:a, curve[0]);
+  // DOL medio en R: MFE medio de los trades donde SÍ llegó al DOL final
+  const dolTrades = withMfe.filter(t=>t.dolReached==='yes');
+  const avgDol = dolTrades.length? dolTrades.reduce((s,t)=>s+t.mfe,0)/dolTrades.length : null;
+  return { enough:true, n:withMfe.length, curve, best, avgDol };
+}
+
+
 // COSTE DE LA INDISCIPLINA — métrica estrella
 // Diferencia entre lo planificado y lo realizado en trades marcados con error.
 // Si cerraste antes de tiempo un ganador, o entraste por FOMO, etc.
@@ -667,25 +691,78 @@ function renderPerformance(v, T){
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
+      <h3>Tu R:R óptimo (según MFE)</h3>
+      ${(()=>{
+        const o=optimalRR(T);
+        if(!o.enough) return `<p class="hint">Necesitas al menos 5 trades con MFE registrado para calcular tu R:R óptimo. Llevas ${o.n}. El MFE (R máximo alcanzado) es lo que permite simular cada nivel de TP.</p>`;
+        return `
+        <div class="grid g-2" style="gap:10px;margin-bottom:14px">
+          <div class="calc-out" style="border-color:var(--green-dim)">
+            <div class="label" style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:6px">R:R ÓPTIMO 👑</div>
+            <div class="big pos">1:${fmt(o.best.tp,1).replace('.0','')}</div>
+            <div class="hint" style="margin-top:6px">Exp ${fmtR(o.best.exp)} · alcanzado ${fmt(o.best.wr,0)}% de las veces</div>
+          </div>
+          <div class="calc-out">
+            <div class="label" style="font-size:11px;color:var(--ink-dim);font-weight:600;margin-bottom:6px">TU DOL MEDIO</div>
+            <div class="big" style="color:var(--blue)">${o.avgDol!=null?'1:'+fmt(o.avgDol,1).replace('.0',''):'—'}</div>
+            <div class="hint" style="margin-top:6px">${o.avgDol!=null?'hasta dónde llega tu DOL':'marca "llegó al DOL" en tus trades'}</div>
+          </div>
+        </div>
+        <div style="position:relative;height:220px"><canvas id="rrChart"></canvas></div>
+        <div class="legend"><span><span class="dot" style="background:var(--green)"></span>Expectancy por R:R</span>${o.avgDol!=null?'<span><span class="dot" style="background:var(--blue)"></span>Tu DOL medio</span>':''}</div>
+        ${(()=>{
+          if(o.avgDol==null) return `<div class="insight" style="margin-top:12px">Marca "¿llegó al DOL final?" en tus trades para ver si tu R:R óptimo cae antes, en, o después de tu DOL.</div>`;
+          const diff=o.best.tp-o.avgDol;
+          if(Math.abs(diff)<=0.25) return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) coincide casi con tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). <b>Tu estructura es correcta</b>: el DOL es exactamente donde más rentabilidad sacas.</div>`;
+          if(diff<0) return `<div class="insight warn" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) cae <b>antes</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). El precio no siempre llega al DOL, así que cerrar un poco antes te daría más rentabilidad a la larga. Plantéate asegurar antes del DOL.</div>`;
+          return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) cae <b>más allá</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). Cuando el precio pasa del DOL suele seguir bastante — pero ojo, quizá son pocos casos. Míralo con cuidado.</div>`;
+        })()}
+        <div class="hint" style="margin-top:8px">Basado en ${o.n} trades con MFE. Asume tu SL fijo de -1R. Un TP solo cuenta como alcanzado si tu MFE llegó a ese nivel.</div>
+        `;
+      })()}
+    </div>
+    <div class="card" style="margin-bottom:14px">
       <h3>Análisis de cierres manuales</h3>
       ${(()=>{
         const manual=T.filter(t=>t.exitType==='manual');
-        const target=T.filter(t=>(t.exitType||'target')==='target' && t.result==='win');
-        if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro si cerrar antes te ayuda o te penaliza.</p>`;
-        // R medio dejado sobre la mesa: planificado - realizado en manuales ganadores
+        if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro si fue suerte, instinto o mala gestión. Registra el MFE y marca el flag "cierre temprano (miedo)" cuando aplique.</p>`;
+
         const manualWins=manual.filter(t=>t.result==='win');
-        let leftOnTable=0, cnt=0;
-        manualWins.forEach(t=>{ const d=(t.plannedR||0)-(t.realizedR||0); if(d>0){leftOnTable+=d;cnt++;} });
-        const avgManualR=expectancy(manual);
-        const avgTargetR=target.length?expectancy(target):0;
+        const withMfe=manualWins.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
+
+        // Cruce: miedo (flag early_close) × llegó al TP (mfe>=plannedR)
+        let luck=0;        // miedo + NO llegó al TP  -> suerte (mala decisión, buen resultado)
+        let fearCost=0, fearCostR=0; // miedo + SÍ llegó al TP -> lo peor (mala decisión, mal resultado)
+        let instinct=0;    // sin miedo + NO llegó al TP -> buen instinto real
+        let misread=0, misreadR=0;   // sin miedo + SÍ llegó al TP -> error de lectura (sin pánico)
+        withMfe.forEach(t=>{
+          const fear=(t.flags||[]).includes('early_close');
+          const reachedTP = t.mfe >= (t.plannedR||0);
+          const leftR = (t.plannedR||0)-(t.realizedR||0);
+          if(fear && !reachedTP) luck++;
+          else if(fear && reachedTP){ fearCost++; fearCostR+=Math.max(0,leftR); }
+          else if(!fear && !reachedTP) instinct++;
+          else if(!fear && reachedTP){ misread++; misreadR+=Math.max(0,leftR); }
+        });
+        const risk=manual[0].riskUSD||200;
+
         return `
-        <div class="grid g-3" style="gap:10px">
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CIERRES MANUALES</div><div class="big">${manual.length}</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R MEDIO MANUAL</div><div class="big ${cls(avgManualR)}">${fmtR(avgManualR)}</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R DEJADO EN LA MESA</div><div class="big neg">${cnt?'-'+fmt(leftOnTable,1)+'R':'—'}</div></div>
+        <div class="grid g-4" style="gap:10px">
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">SUERTE</div><div class="big" style="color:var(--amber)">${luck}</div><div class="hint" style="margin-top:4px">miedo, salió bien</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">BUEN INSTINTO</div><div class="big pos">${instinct}</div><div class="hint" style="margin-top:4px">lectura real</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">MIEDO + COSTE</div><div class="big neg">${fearCost}</div><div class="hint" style="margin-top:4px">-${fmt(fearCostR,1)}R</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">ERROR LECTURA</div><div class="big" style="color:var(--ink-dim)">${misread}</div><div class="hint" style="margin-top:4px">-${fmt(misreadR,1)}R</div></div>
         </div>
-        ${cnt?`<div class="insight warn" style="margin-top:14px">En ${cnt} cierres manuales ganadores dejaste <b>${fmt(leftOnTable,1)}R sin cobrar</b> respecto a tu objetivo. ${target.length?`Tus TP completos promedian ${fmtR(avgTargetR)} vs ${fmtR(avgManualR)} de los manuales.`:''} Si el precio solía llegar a tu TP, cerrar antes te está costando; si no, quizá tu instinto acierta. Míralo con el comparador de arriba.</div>`:`<div class="insight" style="margin-top:14px">Tus cierres manuales no dejaron R sin cobrar respecto al plan. Buen timing.</div>`}
+        ${!withMfe.length?`<div class="insight" style="margin-top:14px">Registra el <b>MFE</b> y marca el flag <b>"cierre temprano (miedo)"</b> en tus cierres manuales. Sin eso no puedo distinguir suerte de instinto.</div>`:`
+          ${luck?`<div class="insight bad" style="margin-top:14px"><b>${luck} cierre(s) por miedo que salieron bien.</b> El precio no llegó a tu TP, así que "acertaste"... pero fue <b>suerte, no instinto</b>. Cerraste por pánico y el mercado te dio la razón por casualidad. No lo confundas: sigue siendo mala gestión aunque el resultado fuera bueno.</div>`:''}
+          ${fearCost?`<div class="insight bad" style="margin-top:10px"><b>${fearCost} cierre(s) por miedo que te costaron dinero.</b> El precio SÍ llegó a tu TP: dejaste ${fmt(fearCostR,1)}R (${fmt$(fearCostR*risk)}) sobre la mesa por cerrar con pánico. El peor caso: mala decisión y mal resultado.</div>`:''}
+          ${instinct?`<div class="insight" style="margin-top:10px"><b>${instinct} cierre(s) de buen instinto.</b> Cerraste sin miedo, por lectura real, y el precio no llegó a tu TP. Buena gestión y buen resultado — esto sí es leer el mercado.</div>`:''}
+          ${misread?`<div class="insight warn" style="margin-top:10px"><b>${misread} error(es) de lectura.</b> Cerraste sin pánico pero el precio sí llegó a tu TP: dejaste ${fmt(misreadR,1)}R. No fue miedo, fue lectura equivocada. Mejorable, pero no es un problema psicológico.</div>`:''}
+          ${(luck+fearCost)>(instinct)?`<div class="insight bad" style="margin-top:10px"><b>Conclusión:</b> tus cierres manuales están dominados por el miedo (${luck+fearCost} de ${withMfe.length}), no por instinto. Aunque a veces salga bien, la suerte no es estrategia. Trabaja en aguantar hasta que tu plan lo diga.</div>`:instinct>0?`<div class="insight" style="margin-top:10px"><b>Conclusión:</b> la mayoría de tus cierres manuales son lectura real, no pánico. Tu instinto está bien calibrado.</div>`:''}
+        `}
         `;
+      })()}
+    </div>
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
@@ -756,6 +833,7 @@ function renderPerformance(v, T){
     </div>
   `;
   drawDistribution('distChart', T);
+  drawRRCurve('rrChart', T);
 }
 
 /* ============================================================
@@ -1208,6 +1286,52 @@ function drawCumulative(id, T){
         y:{position:'left',grid:{color:'#1f2733'},ticks:{color:'#4d9fff',font:{size:10},stepSize:20,callback:v=>Math.round(v)+'%'},min:0,max:100},
         y1:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'#3ddc84',font:{size:10},maxTicksLimit:6,callback:v=>Number(v).toFixed(2)+'R'}}
       }}});
+}
+function drawRRCurve(id, T){
+  const el=$('#'+id); if(!el) return;
+  const o=optimalRR(T);
+  if(!o.enough) return;
+  const labels=o.curve.map(c=>'1:'+String(c.tp).replace('.0',''));
+  const data=o.curve.map(c=>c.exp);
+  const colors=o.curve.map(c=> c.tp===o.best.tp ? '#3ddc84' : 'rgba(61,220,132,.35)');
+  const ds=[{type:'bar',data,backgroundColor:colors,borderRadius:5,order:2}];
+  // línea vertical del DOL: la simulamos con un dataset de puntos si cae en rango
+  charts.rr=new Chart(el,{data:{labels,datasets:ds},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#161c27',borderColor:'#1f2733',borderWidth:1,titleColor:'#e8edf4',bodyColor:'#8a97a8',padding:10,
+        callbacks:{label:ctx=>`Exp: ${ctx.parsed.y>=0?'+':''}${ctx.parsed.y.toFixed(2)}R`}}},
+      scales:{
+        x:{grid:{color:'#1f2733'},ticks:{color:'#5a6573',font:{size:10}}},
+        y:{grid:{color:'#1f2733'},ticks:{color:'#5a6573',font:{size:10},callback:v=>Number(v).toFixed(1)+'R'}}
+      }}});
+  // marcar el DOL medio con una anotación simple (línea dibujada tras render)
+  if(o.avgDol!=null){
+    const ctx=el.getContext('2d');
+    const chart=charts.rr;
+    chart.update();
+    // dibujar línea vertical aproximada en la posición del DOL
+    setTimeout(()=>{
+      try{
+        const xScale=chart.scales.x, yScale=chart.scales.y;
+        // interpolar posición x del DOL entre los niveles
+        const levels=o.curve.map(c=>c.tp);
+        let xPos=null;
+        for(let i=0;i<levels.length-1;i++){
+          if(o.avgDol>=levels[i] && o.avgDol<=levels[i+1]){
+            const frac=(o.avgDol-levels[i])/(levels[i+1]-levels[i]);
+            xPos=xScale.getPixelForValue(i)+(xScale.getPixelForValue(i+1)-xScale.getPixelForValue(i))*frac;
+            break;
+          }
+        }
+        if(xPos!=null){
+          ctx.save();
+          ctx.strokeStyle='#4d9fff'; ctx.lineWidth=2; ctx.setLineDash([5,4]);
+          ctx.beginPath(); ctx.moveTo(xPos,yScale.top); ctx.lineTo(xPos,yScale.bottom); ctx.stroke();
+          ctx.restore();
+        }
+      }catch(e){}
+    },100);
+  }
 }
 function drawDistribution(id, T){
   const el=$('#'+id); if(!el) return;
