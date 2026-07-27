@@ -140,6 +140,65 @@ function toast(msg){
 }
 
 /* ============================================================
+   SISTEMA DE AYUDA (?) — explicaciones de cada métrica
+   ============================================================ */
+const HELP_TEXTS={
+  // Resumen
+  expectancy:['Expectancy','Lo que ganas o pierdes de media por trade, en R. Es la métrica más importante: si es +0,3R, cada trade te da de media 0,3 veces lo que arriesgas. Positiva = tienes ventaja; negativa = pierdes a la larga.'],
+  winrate:['Win rate','Porcentaje de trades ganadores. Ojo: un winrate alto no significa ganar dinero — depende de tu R:R. Por eso nunca se mira solo.'],
+  profitfactor:['Profit factor','Dólares ganados ÷ dólares perdidos. Por encima de 1 ganas; 2 significa que ganas el doble de lo que pierdes.'],
+  totalr:['R acumulado','La suma de todos tus R. Tu resultado total en unidades de riesgo, independiente del tamaño de cada trade.'],
+  maxdd:['Max drawdown','La mayor caída desde un pico en tu curva de resultados. Mide tu peor racha: cuánto llegaste a bajar antes de recuperar.'],
+  disccost:['Coste de la indisciplina','Cuántos R y euros pierdes por errores de ejecución. Compara lo que tu plan habría dado con lo que sacaste, en los trades donde marcaste algún error. Te dice en dinero lo que te cuesta saltarte tus reglas.'],
+  equity:['Curva de equity','Tu R acumulado a lo largo del tiempo. La forma de tu progresión: idealmente sube de forma constante.'],
+  cumchart:['Winrate y expectancy acumulados','Cómo evolucionan esas dos métricas trade a trade. Sirve para ver si tu ventaja mejora, se estabiliza o se degrada con el tiempo.'],
+  // Disciplina
+  discrate:['Tasa de disciplina','Porcentaje de trades sin ningún error marcado. Cuanto más alto, más fiel eres a tu plan.'],
+  cleanstreak:['Racha días limpios','Cuántos días seguidos llevas sin cometer errores de ejecución.'],
+  edgeclean:['Edge limpio vs con error','Compara tu expectancy cuando operas limpio contra cuando cometes errores. Te demuestra en números cuánto te penalizan los fallos.'],
+  flagbreakdown:['Desglose por tipo de error','Cuántas veces cometes cada error (FOMO, cierre temprano...) y cuánto R te cuesta cada uno. Te dice cuál atacar primero.'],
+  planadher:['Adherencia al plan','Compara tu expectancy cuando cumples las 6 reglas de tu plan vs cuando te saltas alguna. Demuestra si tu plan funciona.'],
+  // Rendimiento
+  avgwin:['Avg win','Tu ganancia media en los trades ganadores, en R.'],
+  avgloss:['Avg loss','Tu pérdida media en los trades perdedores, en R.'],
+  breakdowns:['Desgloses','Tu rendimiento separado por setup, sesión, símbolo... Sirve para ver dónde ganas de verdad y dónde pierdes.'],
+  comparador:['Comparador de R:R','Con tus datos reales, calcula qué ratio (1:1 vs 1:1,5) te habría hecho ganar más. Solo cuenta trades donde registraste ambos resultados.'],
+  optimalrr:['R:R óptimo','Usa tu MFE para simular qué TP te daría más rentabilidad. Marca tu DOL medio para que compares si tu óptimo cae antes, en o después del DOL.'],
+  manualclose:['Cierres manuales','Analiza tus cierres antes del TP. Respeta tu criterio: si marcaste "limpio", fue buena decisión. Solo cuenta como coste los que marcaste con error.'],
+  dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
+  distribution:['Distribución de R','Cuántos trades caen en cada rango de R. La altura es número de trades. Muestra la forma de tus resultados.'],
+  streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
+  daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
+  // Sizing
+  sizingcalc:['Calculadora de sizing','Te dice cuántos contratos poner según tu margen hasta el drawdown y tu stop. Pon el riesgo en $ directo o deja que use un % del margen.'],
+  kelly:['Kelly','Termómetro de tu edge, no tu sizing. Valida si tienes ventaja real. Necesita 30+ trades para ser fiable.'],
+  payoutproj:['Proyección de payout','Estima cuántas semanas tardarás en poder cobrar y cuánto, según tu profit diario y días ganadores por semana.']
+};
+let _helpOpen=null;
+function helpIcon(key){ return `<span class="help" onclick="showHelp(event,'${key}')">?</span>`; }
+function showHelp(ev,key){
+  ev.stopPropagation();
+  const pop=$('#helpPop');
+  const h=HELP_TEXTS[key];
+  if(!h){ return; }
+  if(_helpOpen===key){ pop.classList.remove('show'); _helpOpen=null; return; }
+  pop.innerHTML=`<span class="hp-title">${h[0]}</span>${h[1]}`;
+  pop.classList.add('show');
+  _helpOpen=key;
+  // posicionar cerca del icono
+  const r=ev.target.getBoundingClientRect();
+  const pw=280, ph=pop.offsetHeight||120;
+  let left=r.left; let top=r.bottom+8;
+  if(left+pw>window.innerWidth-12) left=window.innerWidth-pw-12;
+  if(top+ph>window.innerHeight-12) top=r.top-ph-8;
+  pop.style.left=Math.max(12,left)+'px';
+  pop.style.top=Math.max(12,top)+'px';
+}
+document.addEventListener('click',e=>{
+  if(!e.target.classList.contains('help')){ const p=$('#helpPop'); if(p){p.classList.remove('show'); _helpOpen=null;} }
+});
+
+/* ============================================================
    MÉTRICAS — el corazón del dashboard
    ============================================================ */
 
@@ -475,7 +534,7 @@ function renderOverview(v, T){
     </div>
 
     <div class="card disc-card" style="margin-bottom:14px">
-      <h3>Coste de la indisciplina <span style="color:var(--ink-faint);text-transform:none;font-weight:400">tu métrica nº1</span></h3>
+      <h3>Coste de la indisciplina ${helpIcon("disccost")} <span style="color:var(--ink-faint);text-transform:none;font-weight:400">tu métrica nº1</span></h3>
       <div class="disc-wrap">
         ${gauge(dr, 'disciplina', dr>=80?'var(--green)':dr>=60?'var(--amber)':'var(--red)')}
         <div class="disc-detail">
@@ -490,11 +549,11 @@ function renderOverview(v, T){
 
     <div class="grid g-2">
       <div class="card">
-        <h3>Curva de equity (R)</h3>
+        <h3>Curva de equity (R) ${helpIcon("equity")}</h3>
         <div style="position:relative;height:220px"><canvas id="equityChart"></canvas></div>
       </div>
       <div class="card">
-        <h3>Winrate y expectancy acumulados</h3>
+        <h3>Winrate y expectancy acumulados ${helpIcon("cumchart")}</h3>
         <div style="position:relative;height:220px"><canvas id="cumChart"></canvas></div>
         <div class="legend"><span><span class="dot" style="background:var(--blue)"></span>Winrate %</span><span><span class="dot" style="background:var(--green)"></span>Expectancy (R)</span></div>
       </div>
@@ -583,7 +642,7 @@ function renderDiscipline(v, T){
     </div>
 
     <div class="card" style="margin-bottom:14px">
-      <h3>¿Tu edge sobrevive a los errores?</h3>
+      <h3>¿Tu edge sobrevive a los errores? ${helpIcon("edgeclean")}</h3>
       <div class="grid g-2">
         <div class="calc-out">
           <div class="label" style="color:var(--green);font-size:11px;font-weight:600;margin-bottom:6px">TRADES LIMPIOS (${clean.length})</div>
@@ -600,7 +659,7 @@ function renderDiscipline(v, T){
     </div>
 
     <div class="card">
-      <h3>Desglose por tipo de error</h3>
+      <h3>Desglose por tipo de error ${helpIcon("flagbreakdown")}</h3>
       ${flagRows.length?`<div class="table-wrap" style="border:none"><table style="min-width:auto">
         <thead><tr><th>Error</th><th>Veces</th><th>R perdido</th><th>% de tus trades</th></tr></thead>
         <tbody>${flagRows.map(([k,s])=>`<tr>
@@ -619,7 +678,7 @@ function renderDiscipline(v, T){
       if(!full.length||!partial.length) return '';
       const diff=expectancy(full)-expectancy(partial);
       return `<div class="card" style="margin-top:14px">
-        <h3>Adherencia al plan</h3>
+        <h3>Adherencia al plan ${helpIcon("planadher")}</h3>
         <div class="grid g-2">
           <div class="calc-out">
             <div class="label" style="color:var(--green);font-size:11px;font-weight:600;margin-bottom:6px">PLAN COMPLETO (${full.length})</div>
@@ -658,7 +717,7 @@ function renderPerformance(v, T){
       <h3>Por setup</h3>${breakdownTable(breakdown(T,'setup'))}
     </div>
     <div class="card" style="margin-bottom:14px">
-      <h3>Comparador de R:R — tu 1:1,5 vs 1:1</h3>
+      <h3>Comparador de R:R — tu 1:1,5 vs 1:1 ${helpIcon("comparador")}</h3>
       ${(()=>{
         const real=scenarioStats(T,'real');
         const withData=T.filter(t=>t.result11);
@@ -691,7 +750,7 @@ function renderPerformance(v, T){
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
-      <h3>Tu R:R óptimo (según MFE)</h3>
+      <h3>Tu R:R óptimo (según MFE) ${helpIcon("optimalrr")}</h3>
       ${(()=>{
         const o=optimalRR(T);
         if(!o.enough) return `<p class="hint">Necesitas al menos 5 trades con MFE registrado para calcular tu R:R óptimo. Llevas ${o.n}. El MFE (R máximo alcanzado) es lo que permite simular cada nivel de TP.</p>`;
@@ -722,7 +781,7 @@ function renderPerformance(v, T){
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
-      <h3>Análisis de cierres manuales</h3>
+      <h3>Análisis de cierres manuales ${helpIcon("manualclose")}</h3>
       ${(()=>{
         const manual=T.filter(t=>t.exitType==='manual');
         if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro el análisis. Marca el flag correspondiente (miedo, FOMO...) si el cierre no siguió tu plan, y registra el MFE.</p>`;
@@ -763,7 +822,7 @@ function renderPerformance(v, T){
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
-      <h3>¿Llega el precio a tu DOL final?</h3>
+      <h3>¿Llega el precio a tu DOL final? ${helpIcon("dolreach")}</h3>
       ${(()=>{
         // Els SL s'exclouen: un stop mai arriba al DOL, comptar-los distorsiona el %
         const withDol=T.filter(t=>(t.dolReached==='yes'||t.dolReached==='no') && t.result!=='loss');
@@ -789,13 +848,13 @@ function renderPerformance(v, T){
       })()}
     </div>
     <div class="card">
-      <h3>Distribución de R por trade</h3>
+      <h3>Cuántos trades caen en cada rango de R ${helpIcon("distribution")}</h3>
       <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
     </div>
 
     <div class="grid g-2" style="margin-top:14px">
       <div class="card">
-        <h3>Rachas</h3>
+        <h3>Rachas ${helpIcon("streaks")}</h3>
         ${(()=>{
           const s=streaks(T);
           const curLabel = s.curType==='win'?`${s.curCount} victoria${s.curCount>1?'s':''} 🔥`:s.curType==='loss'?`${s.curCount} derrota${s.curCount>1?'s':''}`:'—';
@@ -808,7 +867,7 @@ function renderPerformance(v, T){
         })()}
       </div>
       <div class="card">
-        <h3>Día de la semana + disciplina</h3>
+        <h3>Día de la semana + disciplina ${helpIcon("daydisc")}</h3>
         ${(()=>{
           const rows=dayDisciplineBreakdown(T);
           if(!rows.length) return '<p class="hint">Sin datos suficientes.</p>';
@@ -837,16 +896,19 @@ function renderPerformance(v, T){
    CAPITAL & SIZING
    ============================================================ */
 function planOptionsHTML(selId){
-  // genera <option> "Firma|Plan|Fase" para todos los planes de todas las firmas
+  // genera <option> "Firma|Plan|Fase". En sizing solo mostramos cuentas de 50K.
   let opts='';
   Object.keys(DB.firms||{}).forEach(firm=>{
     Object.keys(DB.firms[firm].plans).forEach(plan=>{
+      const p=DB.firms[firm].plans[plan];
+      if((p.size||0)!==50000) return;   // solo 50K
       ['Evaluación','Funded'].forEach(phase=>{
         const val=`${firm}|${plan}|${phase}`;
         opts+=`<option value="${val}">${firm} ${plan} · ${phase}</option>`;
       });
     });
   });
+  if(!opts) opts=`<option value="">— sin cuentas de 50K —</option>`;
   return opts;
 }
 function selectedSpec(selId){
@@ -867,10 +929,10 @@ function renderCapital(v, T){
     </div>
 
     <div class="card" style="margin-bottom:14px">
-      <h3>Calculadora de sizing por margen al drawdown</h3>
+      <h3>Calculadora de sizing por margen al drawdown ${helpIcon("sizingcalc")}</h3>
       <div class="field-row">
-        <div class="field"><label>Cuenta</label><select id="szAcct" onchange="calcSize()">${planOptionsHTML('szAcct')}</select></div>
-        <div class="field"><label>Balance de cierre actual ($)</label><input type="number" id="szBal" value="50000" oninput="calcSize()"></div>
+        <div class="field"><label>Cuenta</label><select id="szAcct" onchange="szAcctChange()">${planOptionsHTML('szAcct')}</select></div>
+        <div class="field"><label>Balance de cierre actual ($)</label><input type="number" id="szBal" value="" oninput="calcSize()"></div>
       </div>
       <div class="field-row-3">
         <div class="field"><label>Riesgo ($) o % del margen</label><input type="number" id="szRiskUSD" value="" placeholder="ex. 660" oninput="calcSize()"></div>
@@ -886,7 +948,7 @@ function renderCapital(v, T){
     </div>
 
     <div class="card" style="margin-bottom:14px">
-      <h3>Validación de edge (Kelly)</h3>
+      <h3>Validación de edge (Kelly) ${helpIcon("kelly")}</h3>
       <div class="grid g-3">
         ${statCard('Kelly completo', T.length>=30?fmt(k*100,1)+'%':'n/a', T.length>=30?'no usar directo':'necesitas 30+ trades','neu')}
         ${statCard('½ Kelly', T.length>=30?fmt(halfK*100,1)+'%':'n/a','~75% crecimiento','pos')}
@@ -896,7 +958,7 @@ function renderCapital(v, T){
     </div>
 
     <div class="card">
-      <h3>Proyección de payout</h3>
+      <h3>Proyección de payout ${helpIcon("payoutproj")}</h3>
       <div class="field-row-3">
         <div class="field"><label>Cuenta</label><select id="pjAcct" onchange="calcPayout()">${planOptionsHTML('pjAcct')}</select></div>
         <div class="field"><label>Profit medio/día ganador ($)</label><input type="number" id="pjDaily" value="300" oninput="calcPayout()"></div>
@@ -905,8 +967,17 @@ function renderCapital(v, T){
       <div class="calc-out" id="pjOut"></div>
     </div>
   `;
-  // seleccionar por defecto la primera fase funded si existe
+  // inicializar el balance con el tamaño de la cuenta seleccionada
+  const spec0=selectedSpec('szAcct');
+  if(spec0 && $('#szBal')) $('#szBal').value=spec0.size;
   calcSize(); calcPayout();
+}
+
+// Al cambiar de cuenta, rellenar el balance con el tamaño de esa cuenta
+function szAcctChange(){
+  const spec=selectedSpec('szAcct');
+  if(spec && $('#szBal')) $('#szBal').value=spec.size;
+  calcSize();
 }
 
 function calcSize(){
@@ -934,7 +1005,10 @@ function calcSize(){
   const dll = spec.dailyLoss||0;
   const safeRoom = ifMaxStops <= room;
   const safeDLL = !dll || ifMaxStops <= dll;
+  // aviso si el balance no cuadra con el tamaño de la cuenta
+  const balIncoherent = bal>0 && (bal < spec.size-spec.drawdown-100 || bal > spec.size+spec.size*0.5);
   $('#szOut').innerHTML=`
+    ${balIncoherent?`<div class="insight warn" style="margin-bottom:12px">⚠ El balance ${fmt$(bal)} no cuadra con una cuenta de ${fmt$(spec.size)}. Ponlo cerca de tu balance real (empieza en ${fmt$(spec.size)}) o vuelve a elegir la cuenta para autocompletarlo.</div>`:''}
     <div class="grid g-4" style="gap:10px">
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">MARGEN AL DD</div><div class="big">${fmt$(room)}</div></div>
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO/TRADE</div><div class="big">${fmt$(riskPerTrade)}</div></div>
@@ -942,9 +1016,9 @@ function calcSize(){
       <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO REAL</div><div class="big">${fmt$(actualRisk)}</div></div>
     </div>
     <hr class="sep">
-    <div class="hint">Risc per contracte: ${points} punts × ${fmt$(ptVal)}/punt = <b>${fmt$(riskPerContract)}</b> · ${usingDirect?`Fent servir risc directe de ${fmt$(riskPerTrade)}`:`Fent servir ${pct}% del marge`}</div>
+    <div class="hint">Riesgo por contrato: ${points} puntos × ${fmt$(ptVal)}/punto = <b>${fmt$(riskPerContract)}</b> · ${usingDirect?`Usando riesgo directo de ${fmt$(riskPerTrade)}`:`Usando ${pct}% del margen`}</div>
     <div class="hint" style="margin-top:6px">Suelo DD actual: <b>${fmt$(floor)}</b>${trailLock&&bal>=trailLock?' (bloqueado ✓)':' (aún trailing)'} · Tope del plan: ${maxC===9999?'—':maxC+' micros'}${spec.maxMini?' / '+spec.maxMini+' minis':''}</div>
-    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El càlcul demanava ${contractsRaw} contractes, però el pla limita a ${maxC}. Retallat al màxim.</div>`:''}
+    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El cálculo pedía ${contractsRaw} contratos, pero el plan limita a ${maxC}. Recortado al máximo.</div>`:''}
     <div class="hint ${safeRoom?'':'dd-warn'}" style="margin-top:6px">Con ${maxStops} stops seguidos perderías <b>${fmt$(ifMaxStops)}</b> ${safeRoom?`— dentro de tu margen de ${fmt$(room)}. ✓`:`— ¡te acerca al drawdown! Reduce riesgo o stop.`}</div>
     ${dll?`<div class="hint ${safeDLL?'':'dd-warn'}" style="margin-top:6px">Daily loss limit ${fmt$(dll)}: ${safeDLL?`${maxStops} stops (${fmt$(ifMaxStops)}) caben dentro. ✓`:`⚠ ${maxStops} stops (${fmt$(ifMaxStops)}) superan el DLL. Baja el riesgo.`}</div>`:''}
   `;
@@ -1332,14 +1406,29 @@ function drawRRCurve(id, T){
 }
 function drawDistribution(id, T){
   const el=$('#'+id); if(!el) return;
-  const buckets={'<-2R':0,'-2..-1':0,'-1..0':0,'0..1':0,'1..2':0,'>2R':0};
-  T.forEach(t=>{const r=t.realizedR||0;
-    if(r<-2)buckets['<-2R']++;else if(r<-1)buckets['-2..-1']++;else if(r<0)buckets['-1..0']++;
-    else if(r<1)buckets['0..1']++;else if(r<2)buckets['1..2']++;else buckets['>2R']++;});
-  const labels=Object.keys(buckets);
-  charts.dist=new Chart(el,{type:'bar',data:{labels,
-    datasets:[{data:Object.values(buckets),backgroundColor:labels.map(l=>l.includes('-')||l.includes('<')?'#ff5d5d':'#3ddc84'),borderRadius:5}]},
-    options:chartBase()});
+  // buckets internos + etiquetas legibles
+  const defs=[
+    {key:'peor', label:'Peor de -2R', test:r=>r<-2, color:'#ff5d5d'},
+    {key:'m2m1', label:'-2R a -1R', test:r=>r>=-2&&r<-1, color:'#ff5d5d'},
+    {key:'m1a0', label:'-1R a 0', test:r=>r>=-1&&r<0, color:'#ff5d5d'},
+    {key:'0a1',  label:'0 a 1R', test:r=>r>=0&&r<1, color:'#3ddc84'},
+    {key:'1a2',  label:'1R a 2R', test:r=>r>=1&&r<2, color:'#3ddc84'},
+    {key:'mas2', label:'Más de 2R', test:r=>r>=2, color:'#3ddc84'}
+  ];
+  const counts=defs.map(d=>0);
+  T.forEach(t=>{
+    const r=t.realizedR||0;
+    const i=defs.findIndex(d=>d.test(r));
+    if(i>=0) counts[i]++;
+  });
+  const base=chartBase();
+  base.scales.y.title={display:true,text:'Nº de trades',color:'#8a97a8',font:{size:11,weight:'600'}};
+  base.scales.y.ticks.precision=0;
+  base.scales.y.ticks.stepSize=1;
+  base.plugins.tooltip.callbacks={label:ctx=>`${ctx.parsed.y} trade${ctx.parsed.y===1?'':'s'}`};
+  charts.dist=new Chart(el,{type:'bar',data:{labels:defs.map(d=>d.label),
+    datasets:[{data:counts,backgroundColor:defs.map(d=>d.color),borderRadius:5}]},
+    options:base});
 }
 
 /* ============================================================

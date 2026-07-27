@@ -202,6 +202,14 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 .phase-btn:hover{color:var(--ink)}
 .phase-btn.active{background:var(--panel-2);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .phase-btn .pf-count{font-family:var(--mono);font-size:10px;color:var(--ink-faint);background:var(--bg);padding:1px 6px;border-radius:5px}
+
+/* ---------- Help tooltip (?) ---------- */
+.help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--panel-2);border:1px solid var(--line);color:var(--ink-faint);font-size:10px;font-weight:700;cursor:pointer;margin-left:6px;vertical-align:middle;transition:.12s;flex:0 0 auto;font-family:var(--sans)}
+.help:hover{background:var(--blue);color:#fff;border-color:var(--blue)}
+.help-pop{position:fixed;z-index:400;max-width:280px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:12.5px;line-height:1.5;color:var(--ink-dim);box-shadow:0 8px 30px rgba(0,0,0,.5);display:none}
+.help-pop.show{display:block}
+.help-pop b{color:var(--ink)}
+.help-pop .hp-title{color:var(--ink);font-weight:700;font-size:13px;margin-bottom:5px;display:block}
 .phase-btn.active .pf-count{color:var(--green)}
 </style>
 </head>
@@ -238,6 +246,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 
 <button class="fab" id="fab">+</button>
 <div class="toast" id="toast"></div>
+<div class="help-pop" id="helpPop"></div>
 <div class="modal-bg" id="modalBg"></div>
 <input type="file" id="fileInput" accept="application/json" style="display:none">
 
