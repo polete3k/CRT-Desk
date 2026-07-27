@@ -725,44 +725,41 @@ function renderPerformance(v, T){
       <h3>Análisis de cierres manuales</h3>
       ${(()=>{
         const manual=T.filter(t=>t.exitType==='manual');
-        if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro si fue suerte, instinto o mala gestión. Registra el MFE y marca el flag "cierre temprano (miedo)" cuando aplique.</p>`;
+        if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro el análisis. Marca el flag correspondiente (miedo, FOMO...) si el cierre no siguió tu plan, y registra el MFE.</p>`;
 
         const manualWins=manual.filter(t=>t.result==='win');
         const withMfe=manualWins.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
 
-        // Cruce: miedo (flag early_close) × llegó al TP (mfe>=plannedR)
-        let luck=0;        // miedo + NO llegó al TP  -> suerte (mala decisión, buen resultado)
-        let fearCost=0, fearCostR=0; // miedo + SÍ llegó al TP -> lo peor (mala decisión, mal resultado)
-        let instinct=0;    // sin miedo + NO llegó al TP -> buen instinto real
-        let misread=0, misreadR=0;   // sin miedo + SÍ llegó al TP -> error de lectura (sin pánico)
+        // El FLAG manda: tú decides si el cierre fue limpio o un error.
+        // clean = seguiste tu plan (decisión buena, la respetamos)
+        // dirty = marcaste algún error (miedo, FOMO...) -> ahí sí analizamos el coste
+        let cleanCount=0, cleanReachedTP=0;   // limpios (info neutra)
+        let errCount=0, errCostR=0, errReachedTP=0;  // con error marcado
         withMfe.forEach(t=>{
-          const fear=(t.flags||[]).includes('early_close');
+          const hasError=(t.flags||[]).some(f=>f!=='clean');
           const reachedTP = t.mfe >= (t.plannedR||0);
-          const leftR = (t.plannedR||0)-(t.realizedR||0);
-          if(fear && !reachedTP) luck++;
-          else if(fear && reachedTP){ fearCost++; fearCostR+=Math.max(0,leftR); }
-          else if(!fear && !reachedTP) instinct++;
-          else if(!fear && reachedTP){ misread++; misreadR+=Math.max(0,leftR); }
+          const leftR = Math.max(0,(t.plannedR||0)-(t.realizedR||0));
+          if(hasError){
+            errCount++;
+            if(reachedTP){ errReachedTP++; errCostR+=leftR; }
+          } else {
+            cleanCount++;
+            if(reachedTP) cleanReachedTP++;
+          }
         });
         const risk=manual[0].riskUSD||200;
 
         return `
-        <div class="grid g-4" style="gap:10px">
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">SUERTE</div><div class="big" style="color:var(--amber)">${luck}</div><div class="hint" style="margin-top:4px">miedo, salió bien</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">BUEN INSTINTO</div><div class="big pos">${instinct}</div><div class="hint" style="margin-top:4px">lectura real</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">MIEDO + COSTE</div><div class="big neg">${fearCost}</div><div class="hint" style="margin-top:4px">-${fmt(fearCostR,1)}R</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">ERROR LECTURA</div><div class="big" style="color:var(--ink-dim)">${misread}</div><div class="hint" style="margin-top:4px">-${fmt(misreadR,1)}R</div></div>
+        <div class="grid g-3" style="gap:10px">
+          <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">CIERRES LIMPIOS</div><div class="big pos">${cleanCount}</div><div class="hint" style="margin-top:4px">seguiste tu plan</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CON ERROR MARCADO</div><div class="big ${errCount?'neg':''}">${errCount}</div><div class="hint" style="margin-top:4px">miedo, FOMO...</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R PERDIDO (errores)</div><div class="big ${errCostR>0?'neg':''}">${errCostR>0?'-'+fmt(errCostR,1)+'R':'—'}</div><div class="hint" style="margin-top:4px">${errCostR>0?fmt$(errCostR*risk):'ninguno'}</div></div>
         </div>
-        ${!withMfe.length?`<div class="insight" style="margin-top:14px">Registra el <b>MFE</b> y marca el flag <b>"cierre temprano (miedo)"</b> en tus cierres manuales. Sin eso no puedo distinguir suerte de instinto.</div>`:`
-          ${luck?`<div class="insight bad" style="margin-top:14px"><b>${luck} cierre(s) por miedo que salieron bien.</b> El precio no llegó a tu TP, así que "acertaste"... pero fue <b>suerte, no instinto</b>. Cerraste por pánico y el mercado te dio la razón por casualidad. No lo confundas: sigue siendo mala gestión aunque el resultado fuera bueno.</div>`:''}
-          ${fearCost?`<div class="insight bad" style="margin-top:10px"><b>${fearCost} cierre(s) por miedo que te costaron dinero.</b> El precio SÍ llegó a tu TP: dejaste ${fmt(fearCostR,1)}R (${fmt$(fearCostR*risk)}) sobre la mesa por cerrar con pánico. El peor caso: mala decisión y mal resultado.</div>`:''}
-          ${instinct?`<div class="insight" style="margin-top:10px"><b>${instinct} cierre(s) de buen instinto.</b> Cerraste sin miedo, por lectura real, y el precio no llegó a tu TP. Buena gestión y buen resultado — esto sí es leer el mercado.</div>`:''}
-          ${misread?`<div class="insight warn" style="margin-top:10px"><b>${misread} error(es) de lectura.</b> Cerraste sin pánico pero el precio sí llegó a tu TP: dejaste ${fmt(misreadR,1)}R. No fue miedo, fue lectura equivocada. Mejorable, pero no es un problema psicológico.</div>`:''}
-          ${(luck+fearCost)>(instinct)?`<div class="insight bad" style="margin-top:10px"><b>Conclusión:</b> tus cierres manuales están dominados por el miedo (${luck+fearCost} de ${withMfe.length}), no por instinto. Aunque a veces salga bien, la suerte no es estrategia. Trabaja en aguantar hasta que tu plan lo diga.</div>`:instinct>0?`<div class="insight" style="margin-top:10px"><b>Conclusión:</b> la mayoría de tus cierres manuales son lectura real, no pánico. Tu instinto está bien calibrado.</div>`:''}
+        ${!withMfe.length?`<div class="insight" style="margin-top:14px">Registra el <b>MFE</b> en tus cierres manuales para el análisis completo.</div>`:`
+          ${cleanCount?`<div class="insight" style="margin-top:14px"><b>${cleanCount} cierre(s) limpio(s).</b> Seguiste tu plan, así que fueron buenas decisiones — el resultado no cambia eso.${cleanReachedTP?` Como dato neutro: en ${cleanReachedTP} de ellos el precio siguió hasta tu TP. No es un error (decidiste bien), pero si ves un patrón, quizá tu plan de salida se pueda afinar.`:` En ninguno el precio siguió hasta tu TP: cerraste justo a tiempo.`}</div>`:''}
+          ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCostR*risk)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
         `}
         `;
-      })()}
-    </div>
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
