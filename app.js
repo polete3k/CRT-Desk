@@ -1453,7 +1453,8 @@ const PLAN_CHECKLIST=[
   'Tener rangos LTF (8h-2h) a favor',
   'No tener rango contrario importante cerca',
   'Tendencia a favor',
-  '1 SL por cuenta por día'
+  '1 SL por cuenta por día',
+  'Poner BE solo al llegar al primer objetivo o más (nunca antes)'
 ];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
