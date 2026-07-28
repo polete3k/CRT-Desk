@@ -1189,25 +1189,35 @@ function renderCalendar(v, T){
   let cells='';
   for(let i=0;i<startDow;i++) cells+=`<div class="cal-cell empty"></div>`;
   const ntByDate={};
-  (DB.noTradeDays||[]).forEach(n=>{ ntByDate[n.date]=n; });
+  (DB.noTradeDays||[]).forEach(n=>{ (ntByDate[n.date]=ntByDate[n.date]||[]).push(n); });
   for(let day=1;day<=daysInMonth;day++){
     const d=byDay[day];
     const dateStr=`${CAL_YEAR}-${String(CAL_MONTH+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const isToday=dateStr===todayStr;
-    const nt=ntByDate[dateStr];
+    const ntList=ntByDate[dateStr]||[];
+    const noday=ntList.find(n=>(n.type||'noday')==='noday');
+    const unfilledCount=ntList.filter(n=>n.type==='unfilled').length;
     if(d){
       const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
       cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
         <div class="daynum">${day}</div>
         ${d.dirty?'<div class="flag-dot" title="día con error"></div>':''}
+        ${unfilledCount?`<div class="nt-badge" title="${unfilledCount} entrada(s) no ejecutada(s)">⊘${unfilledCount>1?unfilledCount:''}</div>`:''}
         <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
         <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
       </div>`;
-    } else if(nt){
-      cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${nt.id}')" title="${NOTRADE_REASONS[nt.reason]||''}">
+    } else if(noday){
+      cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${noday.id}')" title="${NOTRADE_REASONS[noday.reason]||''}">
         <div class="daynum">${day}</div>
         <div class="nt-mark">🚫</div>
-        <div class="meta nt-reason">${(NOTRADE_REASONS[nt.reason]||'').split(' ').slice(0,2).join(' ')}</div>
+        <div class="meta nt-reason">${(NOTRADE_REASONS[noday.reason]||'').split(' ').slice(0,2).join(' ')}</div>
+        ${unfilledCount?`<div class="nt-badge" title="${unfilledCount} entrada(s) no ejecutada(s)">⊘${unfilledCount>1?unfilledCount:''}</div>`:''}
+      </div>`;
+    } else if(unfilledCount){
+      cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${ntList.find(n=>n.type==='unfilled').id}')" title="entrada no ejecutada">
+        <div class="daynum">${day}</div>
+        <div class="nt-mark" style="opacity:.6">⊘</div>
+        <div class="meta nt-reason">no ejecutada${unfilledCount>1?' ×'+unfilledCount:''}</div>
       </div>`;
     } else {
       cells+=`<div class="cal-cell ${isToday?'today':''}"><div class="daynum">${day}</div></div>`;
@@ -1235,8 +1245,13 @@ function renderCalendar(v, T){
           return yy===CAL_YEAR && (mm-1)===CAL_MONTH;
         });
         if(!ntMonth.length) return '';
-        const noSetup=ntMonth.filter(n=>n.reason==='no_setup').length;
-        return `<div class="s"><span class="k">Sin trade</span><span class="v" style="color:var(--ink-dim)">${ntMonth.length}${noSetup?` <span style="font-size:11px;color:var(--ink-faint)">(${noSetup} sin setup)</span>`:''}</span></div>`;
+        const days=ntMonth.filter(n=>(n.type||'noday')==='noday');
+        const unfilled=ntMonth.filter(n=>n.type==='unfilled');
+        const noSetup=days.filter(n=>n.reason==='no_setup').length;
+        let out='';
+        if(days.length) out+=`<div class="s"><span class="k">Días sin operar</span><span class="v" style="color:var(--ink-dim)">${days.length}${noSetup?` <span style="font-size:11px;color:var(--ink-faint)">(${noSetup} sin setup)</span>`:''}</span></div>`;
+        if(unfilled.length) out+=`<div class="s"><span class="k">Entradas no ejecutadas</span><span class="v" style="color:var(--amber)">${unfilled.length}</span></div>`;
+        return out;
       })()}
     </div>
     <div class="hint" style="margin-top:14px">Toca un día para ver el detalle. 🚫 = día sin trade (toca para editarlo). El punto rojo marca días con algún error de ejecución.</div>
@@ -1465,17 +1480,24 @@ function openTradeModal(){ tradeModal(); }
 /* ---------- Dia sense trade ---------- */
 function openNoTradeModal(existing){
   const e=existing||{};
+  const type=e.type||'noday';
   $('#modalBg').innerHTML=`<div class="modal">
-    <h2>${existing?'Editar día sin trade':'Día sin trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <h2>${existing?'Editar registro':'Sin trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field"><label>Tipo de registro</label>
+      <select id="nt_type" onchange="ntTypeChange()">
+        <option value="noday" ${type==='noday'?'selected':''}>Día sin operar (no entré en todo el día)</option>
+        <option value="unfilled" ${type==='unfilled'?'selected':''}>Entrada no ejecutada (limit no filleada, cancelada...)</option>
+      </select>
+    </div>
     <div class="field-row">
       <div class="field"><label>Fecha</label><input type="date" id="nt_date" value="${e.date||todayISO()}"></div>
-      <div class="field"><label>Motivo</label>
+      <div class="field" id="nt_reasonWrap"><label>Motivo</label>
         <select id="nt_reason">
           ${Object.entries(NOTRADE_REASONS).map(([k,l])=>`<option value="${k}" ${e.reason===k?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
     </div>
-    <div class="field"><label>¿Por qué no entré? <span class="hint">explícalo bien, es tan valioso como un trade</span></label>
+    <div class="field"><label id="nt_noteLabel">¿Por qué no entré? <span class="hint">explícalo bien, es tan valioso como un trade</span></label>
       <textarea id="nt_note" rows="4" placeholder="Qué viste en el gráfico, qué faltaba para tu setup, por qué decidiste esperar...">${e.note||''}</textarea>
     </div>
     <div class="field"><label>Capturas (gráfico, contexto...)</label>
@@ -1483,7 +1505,7 @@ function openNoTradeModal(existing){
       <input type="file" id="nt_imgInput" accept="image/*" multiple style="display:none" onchange="handleNoTradeImages(event)">
       <div class="thumb-row" id="nt_thumbs"></div>
     </div>
-    <div class="insight" style="margin-top:4px">Registrar los días que no operas también es disciplina. Si el motivo es "no había setup", es paciencia bien hecha.</div>
+    <div class="insight" id="nt_insight" style="margin-top:4px"></div>
     <div class="modal-actions">
       ${existing?`<button class="btn danger" onclick="deleteNoTrade('${existing.id}')">Eliminar</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
@@ -1493,6 +1515,26 @@ function openNoTradeModal(existing){
   $('#modalBg').classList.add('show');
   $('#modalBg')._ntImages=[...(e.images||[])];
   renderNoTradeThumbs();
+  ntTypeChange();
+}
+// Adapta el modal según el tipo (día sin operar vs entrada no ejecutada)
+function ntTypeChange(){
+  const type=$('#nt_type')?.value||'noday';
+  const reasonWrap=$('#nt_reasonWrap');
+  const noteLabel=$('#nt_noteLabel');
+  const insight=$('#nt_insight');
+  const note=$('#nt_note');
+  if(type==='unfilled'){
+    if(reasonWrap) reasonWrap.style.display='none';   // sin motivos predefinidos, lo explica en la nota
+    if(noteLabel) noteLabel.innerHTML=`¿Qué pasó con la entrada? <span class="hint">explica cómo la gestionaste</span>`;
+    if(note && !note.value) note.placeholder='Ej: sell limit no filleada por 1 punto, el precio fue a TP sin mí. Buena lectura, límite demasiado ajustado.';
+    if(insight) insight.innerHTML='Esto NO cuenta en tu winrate ni expectancy (no hubo operación real). Se registra solo para que veas cómo gestionas estas situaciones con el tiempo.';
+  } else {
+    if(reasonWrap) reasonWrap.style.display='';
+    if(noteLabel) noteLabel.innerHTML=`¿Por qué no entré? <span class="hint">explícalo bien, es tan valioso como un trade</span>`;
+    if(note && !note.value) note.placeholder='Qué viste en el gráfico, qué faltaba para tu setup, por qué decidiste esperar...';
+    if(insight) insight.innerHTML='Registrar los días que no operas también es disciplina. Si el motivo es "no había setup", es paciencia bien hecha.';
+  }
 }
 async function handleNoTradeImages(ev){
   const files=[...ev.target.files];
@@ -1521,9 +1563,13 @@ function removeNoTradeImage(i){
 function saveNoTrade(id){
   const date=$('#nt_date').value;
   if(!date){ toast('Pon una fecha'); return; }
-  const dup=(DB.noTradeDays||[]).find(d=>d.date===date && d.id!==id);
-  if(dup){ toast('Ya tienes un registro para este día'); return; }
-  const nt={ id:id||uid(), date, reason:$('#nt_reason').value, note:$('#nt_note').value.trim(), images:[...($('#modalBg')._ntImages||[])] };
+  const type=$('#nt_type').value;
+  // Solo un "día sin operar" por fecha. Las entradas no ejecutadas pueden repetirse.
+  if(type==='noday'){
+    const dup=(DB.noTradeDays||[]).find(d=>d.date===date && (d.type||'noday')==='noday' && d.id!==id);
+    if(dup){ toast('Ya tienes un día sin operar para esta fecha'); return; }
+  }
+  const nt={ id:id||uid(), date, type, reason:type==='noday'?$('#nt_reason').value:'', note:$('#nt_note').value.trim(), images:[...($('#modalBg')._ntImages||[])] };
   DB.noTradeDays=DB.noTradeDays||[];
   if(id){ const i=DB.noTradeDays.findIndex(d=>d.id===id); DB.noTradeDays[i]=nt; }
   else DB.noTradeDays.push(nt);
@@ -1531,6 +1577,7 @@ function saveNoTrade(id){
   catch(err){ toast('⚠ Almacenamiento lleno. Quita alguna imagen.'); if(!id) DB.noTradeDays.pop(); return; }
   closeModal(); render();
   if(id){ toast('Actualizado'); }
+  else if(type==='unfilled'){ toast('Entrada no ejecutada registrada'); }
   else { showMantra(processMantra(null)); }
 }
 function deleteNoTrade(id){
