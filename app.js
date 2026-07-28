@@ -1458,7 +1458,7 @@ const PLAN_CHECKLIST=[
 ];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
-const SESSIONS=['Londres','NY','Asia','Overlap'];
+const SESSIONS=['Londres (9-12)','London Lunch (12-15)','NY (15:30+)','Otra'];
 
 function openTradeModal(){ tradeModal(); }
 
@@ -1466,37 +1466,75 @@ function openTradeModal(){ tradeModal(); }
 function openNoTradeModal(existing){
   const e=existing||{};
   $('#modalBg').innerHTML=`<div class="modal">
-    <h2>${existing?'Editar dia sense trade':'Dia sense trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
-    <div class="field"><label>Data</label><input type="date" id="nt_date" value="${e.date||todayISO()}"></div>
-    <div class="field"><label>Motiu</label>
-      <select id="nt_reason">
-        ${Object.entries(NOTRADE_REASONS).map(([k,l])=>`<option value="${k}" ${e.reason===k?'selected':''}>${l}</option>`).join('')}
-      </select>
+    <h2>${existing?'Editar día sin trade':'Día sin trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field-row">
+      <div class="field"><label>Fecha</label><input type="date" id="nt_date" value="${e.date||todayISO()}"></div>
+      <div class="field"><label>Motivo</label>
+        <select id="nt_reason">
+          ${Object.entries(NOTRADE_REASONS).map(([k,l])=>`<option value="${k}" ${e.reason===k?'selected':''}>${l}</option>`).join('')}
+        </select>
+      </div>
     </div>
-    <div class="field"><label>Nota (opcional)</label><textarea id="nt_note" rows="2" placeholder="Què vas veure? Per què vas decidir no entrar?">${e.note||''}</textarea></div>
-    <div class="insight" style="margin-top:4px">Registrar els dies que no operes també és disciplina. Si el motiu és "no hi havia setup", és paciència ben feta.</div>
+    <div class="field"><label>¿Por qué no entré? <span class="hint">explícalo bien, es tan valioso como un trade</span></label>
+      <textarea id="nt_note" rows="4" placeholder="Qué viste en el gráfico, qué faltaba para tu setup, por qué decidiste esperar...">${e.note||''}</textarea>
+    </div>
+    <div class="field"><label>Capturas (gráfico, contexto...)</label>
+      <div class="img-drop" id="nt_imgdrop" onclick="document.getElementById('nt_imgInput').click()">📎 Toca para adjuntar imágenes (se comprimen solas)</div>
+      <input type="file" id="nt_imgInput" accept="image/*" multiple style="display:none" onchange="handleNoTradeImages(event)">
+      <div class="thumb-row" id="nt_thumbs"></div>
+    </div>
+    <div class="insight" style="margin-top:4px">Registrar los días que no operas también es disciplina. Si el motivo es "no había setup", es paciencia bien hecha.</div>
     <div class="modal-actions">
       ${existing?`<button class="btn danger" onclick="deleteNoTrade('${existing.id}')">Eliminar</button>`:''}
-      <button class="btn ghost" onclick="closeModal()">Cancel·lar</button>
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn primary" onclick="saveNoTrade('${existing?existing.id:''}')">Guardar</button>
     </div>
   </div>`;
   $('#modalBg').classList.add('show');
+  $('#modalBg')._ntImages=[...(e.images||[])];
+  renderNoTradeThumbs();
+}
+async function handleNoTradeImages(ev){
+  const files=[...ev.target.files];
+  for(const f of files){
+    if(!f.type.startsWith('image/')) continue;
+    const compressed=await compressImage(f);
+    $('#modalBg')._ntImages.push(compressed);
+  }
+  renderNoTradeThumbs();
+  ev.target.value='';
+}
+function renderNoTradeThumbs(){
+  const imgs=$('#modalBg')._ntImages||[];
+  const c=$('#nt_thumbs');
+  if(!c) return;
+  c.innerHTML=imgs.map((src,i)=>`<div style="position:relative">
+    <img class="thumb" src="${src}">
+    <button onclick="removeNoTradeImage(${i})" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;cursor:pointer;line-height:1">×</button>
+  </div>`).join('');
+  $$('#nt_thumbs .thumb').forEach((el,i)=>{ el.onclick=()=>lightbox(imgs[i]); });
+}
+function removeNoTradeImage(i){
+  $('#modalBg')._ntImages.splice(i,1);
+  renderNoTradeThumbs();
 }
 function saveNoTrade(id){
   const date=$('#nt_date').value;
-  if(!date){ toast('Posa una data'); return; }
-  // evitar duplicat de data
+  if(!date){ toast('Pon una fecha'); return; }
   const dup=(DB.noTradeDays||[]).find(d=>d.date===date && d.id!==id);
-  if(dup){ toast('Ja tens un registre per aquest dia'); return; }
-  const nt={ id:id||uid(), date, reason:$('#nt_reason').value, note:$('#nt_note').value.trim() };
+  if(dup){ toast('Ya tienes un registro para este día'); return; }
+  const nt={ id:id||uid(), date, reason:$('#nt_reason').value, note:$('#nt_note').value.trim(), images:[...($('#modalBg')._ntImages||[])] };
   DB.noTradeDays=DB.noTradeDays||[];
   if(id){ const i=DB.noTradeDays.findIndex(d=>d.id===id); DB.noTradeDays[i]=nt; }
   else DB.noTradeDays.push(nt);
-  save(); closeModal(); render(); toast(id?'Actualitzat':'Dia sense trade registrat');
+  try{ save(); }
+  catch(err){ toast('⚠ Almacenamiento lleno. Quita alguna imagen.'); if(!id) DB.noTradeDays.pop(); return; }
+  closeModal(); render();
+  if(id){ toast('Actualizado'); }
+  else { showMantra(processMantra(null)); }
 }
 function deleteNoTrade(id){
-  if(!confirm('Eliminar aquest registre?'))return;
+  if(!confirm('¿Eliminar este registro?'))return;
   DB.noTradeDays=(DB.noTradeDays||[]).filter(d=>d.id!==id);
   save(); closeModal(); render(); toast('Eliminat');
 }
@@ -1605,6 +1643,32 @@ function tradeModal(t){
 }
 
 // Deduce el resultado a partir del R realizado (single source of truth)
+// Mantra de procés: reforça centrar-se en el procés, no en el resultat.
+// t = trade guardat (o null si és un no-trade)
+function processMantra(t){
+  if(!t){
+    // no-trade
+    return "Avui no ha sigut necessari operar. Està súper bé. 🧘";
+  }
+  const hasError=(t.flags||[]).some(f=>f!=='clean');
+  const isLoss=t.result==='loss';
+  if(!hasError){
+    if(isLoss) return "Has operat i ha sigut stop, però has seguit el pla. Està súper bé. 💪";
+    return "Has operat i has seguit el pla de puta mare. 🔥";
+  } else {
+    return "Avui no ha estat del tot bé, però es millorarà. El procés per damunt del resultat. 🌱";
+  }
+}
+function showMantra(msg){
+  const m=$('#mantra');
+  if(!m) return;
+  m.innerHTML=`<div class="m-text">${msg}</div><div class="m-sub">toca para cerrar</div>`;
+  m.classList.add('show');
+  m.style.pointerEvents='auto';
+  const close=()=>{ m.classList.remove('show'); m.style.pointerEvents='none'; m.onclick=null; clearTimeout(m._t); };
+  m.onclick=close;
+  clearTimeout(m._t); m._t=setTimeout(close,4000);
+}
 function resultFromR(r){
   if(r==null||isNaN(r)) return null;
   if(r>0) return 'win';
@@ -1754,7 +1818,9 @@ function saveTrade(id){
     if(!id) DB.trades.pop();
     return;
   }
-  closeModal(); render(); toast(id?'Trade actualizado':'Trade guardado');
+  closeModal(); render();
+  if(id){ toast('Trade actualizado'); }
+  else { showMantra(processMantra(t)); }
 }
 function deleteTrade(id){
   if(!confirm('¿Eliminar este trade?'))return;

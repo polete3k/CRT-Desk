@@ -210,6 +210,12 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 .help-pop.show{display:block}
 .help-pop b{color:var(--ink)}
 .help-pop .hp-title{color:var(--ink);font-weight:700;font-size:13px;margin-bottom:5px;display:block}
+
+/* ---------- Mantra toast ---------- */
+.mantra{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(.9);z-index:500;background:linear-gradient(160deg,var(--panel-2),var(--panel));border:1px solid var(--green-dim);border-radius:18px;padding:28px 32px;max-width:380px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:.35s cubic-bezier(.2,.8,.2,1)}
+.mantra.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.mantra .m-text{font-size:17px;font-weight:600;line-height:1.5;color:var(--ink)}
+.mantra .m-sub{font-size:12px;color:var(--ink-faint);margin-top:10px}
 .phase-btn.active .pf-count{color:var(--green)}
 </style>
 </head>
@@ -247,6 +253,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 <button class="fab" id="fab">+</button>
 <div class="toast" id="toast"></div>
 <div class="help-pop" id="helpPop"></div>
+<div class="mantra" id="mantra"></div>
 <div class="modal-bg" id="modalBg"></div>
 <input type="file" id="fileInput" accept="application/json" style="display:none">
 
