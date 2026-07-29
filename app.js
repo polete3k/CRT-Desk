@@ -1380,44 +1380,57 @@ function drawRRCurve(id, T){
   const labels=o.curve.map(c=>'1:'+String(c.tp).replace('.0',''));
   const data=o.curve.map(c=>c.exp);
   const colors=o.curve.map(c=> c.tp===o.best.tp ? '#3ddc84' : 'rgba(61,220,132,.35)');
-  const ds=[{type:'bar',data,backgroundColor:colors,borderRadius:5,order:2}];
-  // línea vertical del DOL: la simulamos con un dataset de puntos si cae en rango
-  charts.rr=new Chart(el,{data:{labels,datasets:ds},
+  const levels=o.curve.map(c=>c.tp);
+
+  // Plugin que dibuja la línea del DOL medio en cada render (robusto, no se borra)
+  const dolLinePlugin={
+    id:'dolLine',
+    afterDraw(chart){
+      if(o.avgDol==null) return;
+      const xScale=chart.scales.x, yScale=chart.scales.y;
+      // interpolar la posición X del DOL entre los niveles del eje
+      let xPos=null;
+      for(let i=0;i<levels.length-1;i++){
+        if(o.avgDol>=levels[i] && o.avgDol<=levels[i+1]){
+          const frac=(o.avgDol-levels[i])/(levels[i+1]-levels[i]);
+          const x0=xScale.getPixelForValue(i), x1=xScale.getPixelForValue(i+1);
+          xPos=x0+(x1-x0)*frac;
+          break;
+        }
+      }
+      // si el DOL cae más allá del último nivel, lo clavamos al borde derecho
+      if(xPos==null && o.avgDol>levels[levels.length-1]) xPos=xScale.getPixelForValue(levels.length-1);
+      if(xPos==null) return;
+      const ctx=chart.ctx;
+      ctx.save();
+      ctx.strokeStyle='#4d9fff'; ctx.lineWidth=2; ctx.setLineDash([5,4]);
+      ctx.beginPath(); ctx.moveTo(xPos,yScale.top); ctx.lineTo(xPos,yScale.bottom); ctx.stroke();
+      // etiqueta "DOL"
+      ctx.setLineDash([]);
+      ctx.fillStyle='#4d9fff';
+      ctx.font='700 10px Inter, sans-serif';
+      ctx.textAlign='center';
+      const label='DOL '+fmt(o.avgDol,1).replace('.0','')+'R';
+      const tw=ctx.measureText(label).width;
+      let lx=xPos; if(lx+tw/2>chart.width-4) lx=chart.width-tw/2-4; if(lx-tw/2<4) lx=tw/2+4;
+      ctx.fillRect(lx-tw/2-4,yScale.top-16,tw+8,14);
+      ctx.fillStyle='#0b0e14';
+      ctx.fillText(label,lx,yScale.top-5);
+      ctx.restore();
+    }
+  };
+
+  charts.rr=new Chart(el,{type:'bar',
+    data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:5}]},
     options:{responsive:true,maintainAspectRatio:false,
+      layout:{padding:{top:18}},
       plugins:{legend:{display:false},tooltip:{backgroundColor:'#161c27',borderColor:'#1f2733',borderWidth:1,titleColor:'#e8edf4',bodyColor:'#8a97a8',padding:10,
         callbacks:{label:ctx=>`Exp: ${ctx.parsed.y>=0?'+':''}${ctx.parsed.y.toFixed(2)}R`}}},
       scales:{
         x:{grid:{color:'#1f2733'},ticks:{color:'#5a6573',font:{size:10}}},
         y:{grid:{color:'#1f2733'},ticks:{color:'#5a6573',font:{size:10},callback:v=>Number(v).toFixed(1)+'R'}}
-      }}});
-  // marcar el DOL medio con una anotación simple (línea dibujada tras render)
-  if(o.avgDol!=null){
-    const ctx=el.getContext('2d');
-    const chart=charts.rr;
-    chart.update();
-    // dibujar línea vertical aproximada en la posición del DOL
-    setTimeout(()=>{
-      try{
-        const xScale=chart.scales.x, yScale=chart.scales.y;
-        // interpolar posición x del DOL entre los niveles
-        const levels=o.curve.map(c=>c.tp);
-        let xPos=null;
-        for(let i=0;i<levels.length-1;i++){
-          if(o.avgDol>=levels[i] && o.avgDol<=levels[i+1]){
-            const frac=(o.avgDol-levels[i])/(levels[i+1]-levels[i]);
-            xPos=xScale.getPixelForValue(i)+(xScale.getPixelForValue(i+1)-xScale.getPixelForValue(i))*frac;
-            break;
-          }
-        }
-        if(xPos!=null){
-          ctx.save();
-          ctx.strokeStyle='#4d9fff'; ctx.lineWidth=2; ctx.setLineDash([5,4]);
-          ctx.beginPath(); ctx.moveTo(xPos,yScale.top); ctx.lineTo(xPos,yScale.bottom); ctx.stroke();
-          ctx.restore();
-        }
-      }catch(e){}
-    },100);
-  }
+      }},
+    plugins:[dolLinePlugin]});
 }
 function drawDistribution(id, T){
   const el=$('#'+id); if(!el) return;
@@ -1469,7 +1482,8 @@ const PLAN_CHECKLIST=[
   'No tener rango contrario importante cerca',
   'Tendencia a favor',
   '1 SL por cuenta por día',
-  'Poner BE solo al llegar al primer objetivo o más (nunca antes)'
+  'Poner BE solo al llegar al primer objetivo o más (nunca antes)',
+  'Solo puedo cerrar antes si 2/3 pares han llegado ya al DOL o a un objetivo importante'
 ];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
