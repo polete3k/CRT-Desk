@@ -836,6 +836,9 @@ function renderPerformance(v, T){
         const withMfe=be.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
         const wouldveTP=withMfe.filter(t=>t.mfe>=(t.plannedR||0));
         const lostR=wouldveTP.reduce((s,t)=>s+(t.plannedR||0),0);
+        // cruce: de los que habrían ido a TP, cuántos por impulso vs por plan
+        const tpByImpulse=wouldveTP.filter(t=>badFlags(t)).length;
+        const tpByPlan=wouldveTP.filter(t=>!badFlags(t)).length;
         const risk=be[0].riskUSD||200;
         return `
         <div class="grid g-4" style="gap:10px">
@@ -845,7 +848,12 @@ function renderPerformance(v, T){
           <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">HABRÍAN IDO A TP</div><div class="big ${wouldveTP.length?'neg':''}">${wouldveTP.length}</div><div class="hint" style="margin-top:4px">${withMfe.length?'de '+withMfe.length+' con MFE':'registra MFE'}</div></div>
         </div>
         ${impulsive.length?`<div class="insight warn" style="margin-top:14px"><b>${impulsive.length} de ${be.length} BE los moviste por impulso</b> (miedo o fuera de plan). Tu regla dice poner BE solo al llegar al primer objetivo — revisa si te estás adelantando.</div>`:`<div class="insight" style="margin-top:14px">Todos tus BE los pusiste siguiendo el plan. 🎯</div>`}
-        ${wouldveTP.length?`<div class="insight bad" style="margin-top:10px"><b>${wouldveTP.length} BE que habrían ido a TP.</b> El precio te sacó en 0R y luego llegó a tu objetivo: dejaste de ganar ${fmt(lostR,1)}R (${fmt$(lostR*risk)}). Mover el BE te está costando ganadores.</div>`:withMfe.length?`<div class="insight" style="margin-top:10px">Ninguno de tus BE habría llegado a TP. Moviste bien: el precio no iba a seguir. 👍</div>`:''}
+        ${wouldveTP.length?`<div class="insight bad" style="margin-top:10px"><b>${wouldveTP.length} BE que habrían ido a TP.</b> El precio te sacó en 0R y luego llegó a tu objetivo: dejaste de ganar ${fmt(lostR,1)}R (${fmt$(lostR*risk)}).</div>
+        <div class="insight ${tpByImpulse>tpByPlan?'bad':'warn'}" style="margin-top:10px"><b>El cruce clave:</b> de esos ${wouldveTP.length} ganadores perdidos, <b>${tpByImpulse} fueron por impulso</b> (miedo) y <b>${tpByPlan} por plan</b>. ${tpByImpulse>tpByPlan
+          ? 'La mayoría los perdiste por mover el BE con miedo, no por estrategia. Es un problema de DISCIPLINA: si aguantas tu plan, recuperas esos ganadores.'
+          : tpByPlan>tpByImpulse
+          ? 'La mayoría los perdiste siguiendo tu plan. No es miedo — es tu REGLA de BE la que es demasiado ajustada. Plantéate mover el BE más tarde o a un nivel con más margen.'
+          : 'Están repartidos entre impulso y plan. Ataca las dos cosas: más disciplina para no adelantarte, y revisa si tu nivel de BE es muy ajustado.'}</div>`:withMfe.length?`<div class="insight" style="margin-top:10px">Ninguno de tus BE habría llegado a TP. Moviste bien: el precio no iba a seguir. 👍</div>`:''}
         `;
       })()}
     </div>
