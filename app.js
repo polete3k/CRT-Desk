@@ -166,6 +166,7 @@ const HELP_TEXTS={
   optimalrr:['R:R óptimo','Usa tu MFE para simular qué TP te daría más rentabilidad. Marca tu DOL medio para que compares si tu óptimo cae antes, en o después del DOL.'],
   manualclose:['Cierres manuales','Analiza tus cierres antes del TP. Respeta tu criterio: si marcaste "limpio", fue buena decisión. Solo cuenta como coste los que marcaste con error.'],
   dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
+  beanalysis:['Análisis de BE','De tus salidas por BE saltado: cuántos moviste según plan vs por impulso, y cuántos habrían ido a TP (usando el MFE). Te dice si mover el BE pronto te cuesta ganadores.'],
   distribution:['Distribución de R','Cuántos trades caen en cada rango de R. La altura es número de trades. Muestra la forma de tus resultados.'],
   streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
   daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
@@ -818,6 +819,33 @@ function renderPerformance(v, T){
           ${cleanCount?`<div class="insight" style="margin-top:14px"><b>${cleanCount} cierre(s) limpio(s).</b> Seguiste tu plan, así que fueron buenas decisiones — el resultado no cambia eso.${cleanReachedTP?` Como dato neutro: en ${cleanReachedTP} de ellos el precio siguió hasta tu TP. No es un error (decidiste bien), pero si ves un patrón, quizá tu plan de salida se pueda afinar.`:` En ninguno el precio siguió hasta tu TP: cerraste justo a tiempo.`}</div>`:''}
           ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCostR*risk)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
         `}
+        `;
+      })()}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Análisis de break-even (BE) ${helpIcon("beanalysis")}</h3>
+      ${(()=>{
+        const be=T.filter(t=>t.exitType==='be_moved');
+        if(!be.length) return `<p class="hint">Aún no tienes salidas marcadas como "Movió BE y saltó". Cuando las registres (con su MFE), te muestro si mueves el BE bien o por impulso, y cuántos habrían ido a TP.</p>`;
+        // bien puesto = sin flags de impulso (siguió el plan: BE solo tras primer objetivo)
+        // mal puesto = con moved_stop o early_close (lo movió por miedo/fuera de plan)
+        const badFlags=t=>(t.flags||[]).some(f=>f==='moved_stop'||f==='early_close'||f==='fomo');
+        const wellPlaced=be.filter(t=>!badFlags(t));
+        const impulsive=be.filter(t=>badFlags(t));
+        // de los BE, cuántos habrían ido a TP (MFE >= plannedR)
+        const withMfe=be.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
+        const wouldveTP=withMfe.filter(t=>t.mfe>=(t.plannedR||0));
+        const lostR=wouldveTP.reduce((s,t)=>s+(t.plannedR||0),0);
+        const risk=be[0].riskUSD||200;
+        return `
+        <div class="grid g-4" style="gap:10px">
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TOTAL BE</div><div class="big">${be.length}</div></div>
+          <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">BIEN PUESTOS</div><div class="big pos">${wellPlaced.length}</div><div class="hint" style="margin-top:4px">según plan</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">POR IMPULSO</div><div class="big ${impulsive.length?'neg':''}">${impulsive.length}</div><div class="hint" style="margin-top:4px">miedo / fuera de plan</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">HABRÍAN IDO A TP</div><div class="big ${wouldveTP.length?'neg':''}">${wouldveTP.length}</div><div class="hint" style="margin-top:4px">${withMfe.length?'de '+withMfe.length+' con MFE':'registra MFE'}</div></div>
+        </div>
+        ${impulsive.length?`<div class="insight warn" style="margin-top:14px"><b>${impulsive.length} de ${be.length} BE los moviste por impulso</b> (miedo o fuera de plan). Tu regla dice poner BE solo al llegar al primer objetivo — revisa si te estás adelantando.</div>`:`<div class="insight" style="margin-top:14px">Todos tus BE los pusiste siguiendo el plan. 🎯</div>`}
+        ${wouldveTP.length?`<div class="insight bad" style="margin-top:10px"><b>${wouldveTP.length} BE que habrían ido a TP.</b> El precio te sacó en 0R y luego llegó a tu objetivo: dejaste de ganar ${fmt(lostR,1)}R (${fmt$(lostR*risk)}). Mover el BE te está costando ganadores.</div>`:withMfe.length?`<div class="insight" style="margin-top:10px">Ninguno de tus BE habría llegado a TP. Moviste bien: el precio no iba a seguir. 👍</div>`:''}
         `;
       })()}
     </div>
@@ -1644,6 +1672,7 @@ function tradeModal(t){
       <select id="f_exitType">
         <option value="target" ${(e.exitType||'target')==='target'?'selected':''}>TP completo (llegó a mi 1:1,5)</option>
         <option value="manual" ${e.exitType==='manual'?'selected':''}>Cierre manual (cerré antes del objetivo)</option>
+        <option value="be_moved" ${e.exitType==='be_moved'?'selected':''}>Movió BE y saltó (salí en ~0R)</option>
         <option value="stop" ${e.exitType==='stop'?'selected':''}>SL (saltó el stop)</option>
       </select>
       <div class="hint" style="margin-top:5px">Lo que de verdad cuenta para tus métricas es el <b>R realizado</b> de arriba. Esto solo clasifica cómo cerraste.</div>
