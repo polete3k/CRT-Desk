@@ -107,6 +107,16 @@ function load(){
         a.phase = a.phase||'Evaluación';
       }
     });
+    // migrar nombres de sesión antiguos a los nuevos
+    const SESSION_MIGRATION={
+      'Londres':'Londres (9-12)',
+      'NY':'NY (15:30+)',
+      'Asia':'Otra',
+      'Overlap':'Otra'
+    };
+    (base.trades||[]).forEach(t=>{
+      if(t.session && SESSION_MIGRATION[t.session]) t.session=SESSION_MIGRATION[t.session];
+    });
     return base;
   }catch(e){
     const d = structuredClone(DEFAULTS);
@@ -2245,5 +2255,7 @@ function init(){
   $('#modalBg').addEventListener('mousedown',e=>{ _downOnBg = (e.target.id==='modalBg'); });
   $('#modalBg').addEventListener('mouseup',e=>{ if(_downOnBg && e.target.id==='modalBg') closeModal(); _downOnBg=false; });
   render();
+  // consolidar migraciones (sesiones, cuentas) guardando una vez al arrancar
+  try{ save(); }catch(e){}
 }
 init();
