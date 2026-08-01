@@ -167,6 +167,7 @@ const HELP_TEXTS={
   manualclose:['Cierres manuales','Analiza tus cierres antes del TP. Respeta tu criterio: si marcaste "limpio", fue buena decisión. Solo cuenta como coste los que marcaste con error.'],
   dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
   beanalysis:['Análisis de BE','De tus salidas por BE saltado: cuántos moviste según plan vs por impulso, y cuántos habrían ido a TP (usando el MFE). Te dice si mover el BE pronto te cuesta ganadores.'],
+  maeanalysis:['¿SL demasiado lejos?','Usa el MAE (cuánto fue el precio en contra) de tus ganadores para ver si tu stop está muy holgado. Si tus ganadores sufren poco antes de girarse, podrías ajustar el SL. Te avisa de no comerte las manipulaciones.'],
   distribution:['Distribución de R','Cuántos trades caen en cada rango de R. La altura es número de trades. Muestra la forma de tus resultados.'],
   streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
   daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
@@ -819,6 +820,39 @@ function renderPerformance(v, T){
           ${cleanCount?`<div class="insight" style="margin-top:14px"><b>${cleanCount} cierre(s) limpio(s).</b> Seguiste tu plan, así que fueron buenas decisiones — el resultado no cambia eso.${cleanReachedTP?` Como dato neutro: en ${cleanReachedTP} de ellos el precio siguió hasta tu TP. No es un error (decidiste bien), pero si ves un patrón, quizá tu plan de salida se pueda afinar.`:` En ninguno el precio siguió hasta tu TP: cerraste justo a tiempo.`}</div>`:''}
           ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCostR*risk)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
         `}
+        `;
+      })()}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>¿Está tu SL demasiado lejos? (MAE) ${helpIcon("maeanalysis")}</h3>
+      ${(()=>{
+        const withMae=T.filter(t=>!isNaN(t.mae)&&t.mae!=null);
+        if(withMae.length<5) return `<p class="hint">Registra el MAE (R máximo en contra) en tus trades. Con 5+ te muestro si tu SL está demasiado lejos. Fiable de verdad a partir de 20-30 trades.</p>`;
+        const wins=withMae.filter(t=>t.result==='win');
+        const losses=withMae.filter(t=>t.result==='loss');
+        const avg=arr=>arr.length?arr.reduce((s,t)=>s+t.mae,0)/arr.length:0;
+        const max=arr=>arr.length?Math.max(...arr.map(t=>t.mae)):0;
+        const avgWinMae=avg(wins), maxWinMae=max(wins);
+        const avgLossMae=avg(losses);
+        // percentil 90 del MAE de ganadores: el stop que respetaría el 90% de tus ganadores
+        const winMaes=wins.map(t=>t.mae).sort((a,b)=>a-b);
+        const p90=winMaes.length?winMaes[Math.min(winMaes.length-1,Math.floor(winMaes.length*0.9))]:0;
+        return `
+        <div class="grid g-3" style="gap:10px">
+          <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">MAE MEDIO GANADORES</div><div class="big pos">${fmt(avgWinMae,2)}R</div><div class="hint" style="margin-top:4px">cuánto sufren antes de ganar</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PEOR MAE GANADOR</div><div class="big">${fmt(maxWinMae,2)}R</div><div class="hint" style="margin-top:4px">el que más aguantó</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">MAE MEDIO PERDEDORES</div><div class="big neg">${fmt(avgLossMae,2)}R</div><div class="hint" style="margin-top:4px">${losses.length} SL</div></div>
+        </div>
+        <div class="insight ${p90<0.7?'warn':''}" style="margin-top:14px">
+          El <b>90% de tus ganadores</b> no fue más allá de <b>${fmt(p90,2)}R en contra</b> antes de girarse.
+          ${p90<0.7
+            ? ` Tu SL a 1R está probablemente <b>demasiado lejos</b>: podrías ajustarlo a ~${fmt(Math.min(1,p90+0.15),1)}R y arriesgar menos sin perder casi ganadores. Eso mejoraría tu R:R en cada trade.`
+            : ` Tu SL parece bien ajustado — tus ganadores usan buena parte del margen antes de girarse, así que recortarlo te sacaría de trades buenos.`}
+        </div>
+        <div class="insight" style="margin-top:10px"><b>Ojo con las manipulaciones:</b> ${maxWinMae>=0.85
+          ? `tu peor ganador aguantó ${fmt(maxWinMae,2)}R en contra. Si ajustas el SL por debajo de eso, te comerías ese tipo de barridos de liquidez. No bajes del ${fmt(maxWinMae,1)}R sin pensarlo.`
+          : `ninguno de tus ganadores necesitó más de ${fmt(maxWinMae,2)}R de margen, así que tienes espacio para ajustar sin comerte manipulaciones grandes.`}</div>
+        <div class="hint" style="margin-top:8px">Basado en ${withMae.length} trades con MAE (${wins.length} ganadores, ${losses.length} perdedores). ${withMae.length<20?'⚠ Pocos datos: no saques conclusiones firmes hasta tener 20-30 trades.':''}</div>
         `;
       })()}
     </div>
@@ -1707,6 +1741,10 @@ function tradeModal(t){
       </div>
     </div>
     <div class="hint" style="margin:-6px 0 12px">MFE = hasta qué R se movió el precio a tu favor, aunque no lo cobraras. <b>En un SL también importa</b>: te dice si acertaste dirección pero te sacaron, o si la entrada estaba mal.</div>
+    <div class="field"><label>R máximo en contra (MAE) <span class="hint">cuánto sufrió antes de resolverse</span></label>
+      <input type="number" id="f_mae" step="0.1" min="0" value="${e.mae??''}" placeholder="ex. 0.4">
+      <div class="hint" style="margin-top:5px">Cuánto se movió el precio EN CONTRA (en R positivos) antes de irse a favor o al stop. Sirve para saber si tu SL está demasiado lejos. Ej: si pusiste SL a 1R pero el precio solo fue 0,4R en contra antes de ganar, pon 0,4.</div>
+    </div>
     <div class="field"><label>Flags de ejecución (marca lo que pasó)</label>
       <div class="chips" id="f_flags">
         ${Object.entries(FLAG_LABELS).map(([k,l])=>`<button type="button" class="chip ${flags.includes(k)?(k==='clean'?'on good':'on'):''}" data-flag="${k}" onclick="toggleFlag('${k}')">${l}</button>`).join('')}
@@ -1901,6 +1939,7 @@ function saveTrade(id){
     result11:$('#f_result11').value,
     dolReached:$('#f_dolReached').value,
     mfe:parseFloat($('#f_mfe').value),
+    mae:parseFloat($('#f_mae').value),
     flags:[...flags],
     note:$('#f_note').value.trim(),
     images:[...($('#modalBg')._images||[])],
