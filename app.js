@@ -168,6 +168,7 @@ const HELP_TEXTS={
   dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
   beanalysis:['Análisis de BE','De tus salidas por BE saltado: cuántos moviste según plan vs por impulso, y cuántos habrían ido a TP (usando el MFE). Te dice si mover el BE pronto te cuesta ganadores.'],
   maeanalysis:['¿SL demasiado lejos?','Usa el MAE (cuánto fue el precio en contra) de tus ganadores para ver si tu stop está muy holgado. Si tus ganadores sufren poco antes de girarse, podrías ajustar el SL. Te avisa de no comerte las manipulaciones.'],
+  movetype:['Origen del movimiento','Compara tu rendimiento según dónde empezó el movimiento: el impulso de apertura NY (9:30-10h) o el PO3 de la vela de 4h de las 10h. Te dice con qué estructura CRT ganas más.'],
   distribution:['Distribución de R','Cuántos trades caen en cada rango de R. La altura es número de trades. Muestra la forma de tus resultados.'],
   streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
   daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
@@ -717,6 +718,33 @@ function renderPerformance(v, T){
     </div>
     <div class="card" style="margin-bottom:14px">
       <h3>Por setup</h3>${breakdownTable(breakdown(T,'setup'))}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>¿Dónde empieza el movimiento? (estructura CRT) ${helpIcon("movetype")}</h3>
+      ${(()=>{
+        const withMove=T.filter(t=>t.moveType);
+        if(withMove.length<3) return `<p class="hint">Marca "¿Dónde empezó el movimiento?" en tus trades. Con 3+ te muestro si te va mejor con el impulso de apertura o con el PO3 de la vela de 4h.</p>`;
+        const groups={};
+        withMove.forEach(t=>{ (groups[t.moveType]=groups[t.moveType]||[]).push(t); });
+        const rows=Object.keys(groups).map(k=>{
+          const ts=groups[k];
+          return { key:k, label:MOVE_TYPES[k]||k, n:ts.length, exp:expectancy(ts), wr:winrate(ts), r:ts.reduce((s,t)=>s+(t.realizedR||0),0) };
+        }).sort((a,b)=>b.exp-a.exp);
+        const best=rows[0];
+        return `
+        <div class="table-wrap" style="border:none"><table>
+          <thead><tr><th>Origen</th><th>N</th><th>Exp</th><th>WR</th><th>R acum</th></tr></thead>
+          <tbody>${rows.map(r=>`<tr>
+            <td style="font-family:var(--sans);font-weight:600">${r.label}</td>
+            <td>${r.n}</td>
+            <td class="${cls(r.exp)}">${fmtR(r.exp)}</td>
+            <td>${fmt(r.wr,0)}%</td>
+            <td class="${cls(r.r)}">${fmtR(r.r)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        ${rows.length>=2?`<div class="insight" style="margin-top:12px">Tu mejor estructura es <b>${best.label}</b> (${fmtR(best.exp)} de expectancy sobre ${best.n} trades). Si la diferencia es grande y tienes datos suficientes, prioriza operar esa estructura y sé más selectivo con las otras.</div>`:`<div class="insight" style="margin-top:12px">Solo tienes datos de una estructura por ahora. Registra más para poder comparar.</div>`}
+        `;
+      })()}
     </div>
     <div class="card" style="margin-bottom:14px">
       <h3>Comparador de R:R — tu 1:1,5 vs 1:1 ${helpIcon("comparador")}</h3>
@@ -1558,6 +1586,12 @@ const PLAN_CHECKLIST=[
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
 const SESSIONS=['Londres (9-12)','London Lunch (12-15)','NY (15:30+)','Otra'];
+// Origen del movimiento (estructura CRT en NY)
+const MOVE_TYPES={
+  open930:'Impulso apertura NY (9:30-10h)',
+  po3_4h:'PO3 vela 4h de las 10h (manipula y va al DOL)',
+  other:'Otro momento'
+};
 
 function openTradeModal(){ tradeModal(); }
 
@@ -1699,6 +1733,13 @@ function tradeModal(t){
       <div class="field"><label>Setup</label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
       <div class="field"><label>Sesión</label><select id="f_session">${SESSIONS.map(s=>`<option ${e.session===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
+    <div class="field"><label>¿Dónde empezó el movimiento? <span class="hint">estructura CRT</span></label>
+      <select id="f_moveType" onchange="toggleMoveOther()">
+        <option value="" ${!e.moveType?'selected':''}>— no registrado —</option>
+        ${Object.entries(MOVE_TYPES).map(([k,l])=>`<option value="${k}" ${e.moveType===k?'selected':''}>${l}</option>`).join('')}
+      </select>
+      <input type="text" id="f_moveOther" placeholder="Especifica qué momento..." value="${e.moveOther||''}" style="margin-top:8px;display:none">
+    </div>
     <div class="field"><label>Cuenta</label><select id="f_account"><option value="">— sin asignar —</option>${DB.accounts.map(a=>`<option ${e.account===a.name?'selected':''}>${a.name}</option>`).join('')}</select></div>
     <div class="field-row-3">
       <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
@@ -1776,6 +1817,7 @@ function tradeModal(t){
   $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',updatePlanCount));
   updatePlanCount();
   onRealizedRChange();
+  toggleMoveOther();
 }
 
 // Deduce el resultado a partir del R realizado (single source of truth)
@@ -1812,6 +1854,13 @@ function resultFromR(r){
   return 'be';
 }
 
+// Muestra el campo de texto libre solo si el origen del movimiento es "otro"
+function toggleMoveOther(){
+  const sel=$('#f_moveType');
+  const inp=$('#f_moveOther');
+  if(!sel||!inp) return;
+  inp.style.display = sel.value==='other' ? '' : 'none';
+}
 function onRealizedRChange(){
   const r=parseFloat($('#f_realizedR')?.value);
   const risk=parseFloat($('#f_riskUSD')?.value)||0;
@@ -1929,6 +1978,8 @@ function saveTrade(id){
     symbol:$('#f_symbol').value.trim().toUpperCase(),
     setup:$('#f_setup').value,
     session:$('#f_session').value,
+    moveType:$('#f_moveType').value,
+    moveOther:$('#f_moveType').value==='other'?$('#f_moveOther').value.trim():'',
     account:$('#f_account').value,
     plannedR:parseFloat($('#f_plannedR').value)||0,
     realizedR:isNaN(realizedR)?0:realizedR,
