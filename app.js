@@ -1763,7 +1763,7 @@ function tradeModal(t){
     </div>
     <div class="field"><label>¿Cómo saliste?</label>
       <select id="f_exitType">
-        <option value="target" ${(e.exitType||'target')==='target'?'selected':''}>TP completo (llegó a mi 1:1,5)</option>
+        <option value="target" ${(e.exitType||'target')==='target'?'selected':''}>TP completo (llegué a mi objetivo)</option>
         <option value="manual" ${e.exitType==='manual'?'selected':''}>Cierre manual (cerré antes del objetivo)</option>
         <option value="be_moved" ${e.exitType==='be_moved'?'selected':''}>Movió BE y saltó (salí en ~0R)</option>
         <option value="stop" ${e.exitType==='stop'?'selected':''}>SL (saltó el stop)</option>
