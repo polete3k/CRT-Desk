@@ -179,6 +179,7 @@ const HELP_TEXTS={
   beanalysis:['Análisis de BE','De tus salidas por BE saltado: cuántos moviste según plan vs por impulso, y cuántos habrían ido a TP (usando el MFE). Te dice si mover el BE pronto te cuesta ganadores.'],
   maeanalysis:['¿SL demasiado lejos?','Usa el MAE (cuánto fue el precio en contra) de tus ganadores para ver si tu stop está muy holgado. Si tus ganadores sufren poco antes de girarse, podrías ajustar el SL. Te avisa de no comerte las manipulaciones.'],
   movetype:['Origen del movimiento','Compara tu rendimiento según dónde empezó el movimiento: el impulso de apertura NY (9:30-10h) o el PO3 de la vela de 4h de las 10h. Te dice con qué estructura CRT ganas más.'],
+  smt:['RS Scalp (SMT)','De las entradas por SMT que aparecieron (entraras o no): cuántas van a TP y si el timing respecto a la apertura NY influye. Sirve para validar esta subestrategia antes de confiar en ella.'],
   distribution:['Distribución de R','Cuántos trades caen en cada rango de R. La altura es número de trades. Muestra la forma de tus resultados.'],
   streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
   daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
@@ -753,6 +754,46 @@ function renderPerformance(v, T){
           </tr>`).join('')}</tbody>
         </table></div>
         ${rows.length>=2?`<div class="insight" style="margin-top:12px">Tu mejor estructura es <b>${best.label}</b> (${fmtR(best.exp)} de expectancy sobre ${best.n} trades). Si la diferencia es grande y tienes datos suficientes, prioriza operar esa estructura y sé más selectivo con las otras.</div>`:`<div class="insight" style="margin-top:12px">Solo tienes datos de una estructura por ahora. Registra más para poder comparar.</div>`}
+        `;
+      })()}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>RS Scalp — entradas por SMT ${helpIcon("smt")}</h3>
+      ${(()=>{
+        const smt=T.filter(t=>t.smt==='yes' && t.smtResult);
+        if(smt.length<3) return `<p class="hint">Marca "¿Hubo entrada por SMT?" en tus trades. Con 3+ te muestro cómo funciona esta subestrategia: cuántas van a TP y si el timing respecto a la apertura influye.</p>`;
+        const tp=smt.filter(t=>t.smtResult==='tp').length;
+        const sl=smt.filter(t=>t.smtResult==='sl').length;
+        const be=smt.filter(t=>t.smtResult==='be').length;
+        const wr=smt.length?tp/smt.length*100:0;
+        // por timing
+        const TIMING={before:'Antes apertura (<9:30)',open:'En apertura (9:30-10)',after:'Después (>10:00)'};
+        const byTiming=Object.keys(TIMING).map(k=>{
+          const ts=smt.filter(t=>t.smtTiming===k);
+          const t_tp=ts.filter(t=>t.smtResult==='tp').length;
+          return { key:k, label:TIMING[k], n:ts.length, tp:t_tp, wr:ts.length?t_tp/ts.length*100:0 };
+        }).filter(r=>r.n>0).sort((a,b)=>b.wr-a.wr);
+        return `
+        <div class="grid g-4" style="gap:10px">
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TOTAL SMT</div><div class="big">${smt.length}</div></div>
+          <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">% A TP</div><div class="big ${wr>=50?'pos':'neg'}">${fmt(wr,0)}%</div><div class="hint" style="margin-top:4px">${tp}/${smt.length}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">A SL</div><div class="big neg">${sl}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">BE</div><div class="big">${be}</div></div>
+        </div>
+        ${byTiming.length?`
+        <div class="table-wrap" style="border:none;margin-top:14px"><table style="min-width:auto">
+          <thead><tr><th>Timing</th><th>N</th><th>A TP</th><th>% acierto</th></tr></thead>
+          <tbody>${byTiming.map(r=>`<tr>
+            <td style="font-family:var(--sans);font-weight:600">${r.label}</td>
+            <td>${r.n}</td>
+            <td>${r.tp}</td>
+            <td class="${r.wr>=50?'pos':'neg'}">${fmt(r.wr,0)}%</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div class="insight ${wr>=50?'':'warn'}" style="margin-top:12px">
+          Los SMT van a TP el <b>${fmt(wr,0)}%</b> de las veces (${smt.length} señales). ${byTiming.length>=2?`Tu mejor timing es <b>${byTiming[0].label}</b> (${fmt(byTiming[0].wr,0)}% acierto). ${byTiming[0].wr-byTiming[byTiming.length-1].wr>=25?'La diferencia entre timings es notable — prioriza el mejor.':'Los timings rinden parecido de momento.'}`:''}
+          ${smt.length<15?' ⚠ Aún pocos datos: no saques conclusiones firmes hasta 15-20 señales.':''}
+        </div>`:''}
         `;
       })()}
     </div>
@@ -1750,6 +1791,30 @@ function tradeModal(t){
       </select>
       <input type="text" id="f_moveOther" placeholder="Especifica qué momento..." value="${e.moveOther||''}" style="margin-top:8px;display:none">
     </div>
+    <div class="field"><label>¿Hubo entrada por SMT? <span class="hint">RS Scalp — si apareció el señal, entraras o no</span></label>
+      <select id="f_smt" onchange="toggleSmt()">
+        <option value="" ${!e.smt?'selected':''}>— no hubo / no registrado —</option>
+        <option value="yes" ${e.smt==='yes'?'selected':''}>Sí, apareció entrada por SMT</option>
+      </select>
+    </div>
+    <div id="f_smtDetails" style="display:none">
+      <div class="field-row">
+        <div class="field"><label>Resultado del SMT</label>
+          <select id="f_smtResult">
+            <option value="tp" ${e.smtResult==='tp'?'selected':''}>TP (habría ganado)</option>
+            <option value="sl" ${e.smtResult==='sl'?'selected':''}>SL (habría perdido)</option>
+            <option value="be" ${e.smtResult==='be'?'selected':''}>BE</option>
+          </select>
+        </div>
+        <div class="field"><label>Timing respecto apertura NY</label>
+          <select id="f_smtTiming">
+            <option value="before" ${e.smtTiming==='before'?'selected':''}>Antes de apertura (&lt;9:30)</option>
+            <option value="open" ${e.smtTiming==='open'?'selected':''}>En apertura (9:30-10:00)</option>
+            <option value="after" ${e.smtTiming==='after'?'selected':''}>Después (&gt;10:00)</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <div class="field"><label>Cuenta</label><select id="f_account"><option value="">— sin asignar —</option>${DB.accounts.map(a=>`<option ${e.account===a.name?'selected':''}>${a.name}</option>`).join('')}</select></div>
     <div class="field-row-3">
       <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
@@ -1828,6 +1893,7 @@ function tradeModal(t){
   updatePlanCount();
   onRealizedRChange();
   toggleMoveOther();
+  toggleSmt();
 }
 
 // Deduce el resultado a partir del R realizado (single source of truth)
@@ -1870,6 +1936,13 @@ function toggleMoveOther(){
   const inp=$('#f_moveOther');
   if(!sel||!inp) return;
   inp.style.display = sel.value==='other' ? '' : 'none';
+}
+// Mostra els detalls de l'SMT només si hi ha hagut entrada
+function toggleSmt(){
+  const sel=$('#f_smt');
+  const box=$('#f_smtDetails');
+  if(!sel||!box) return;
+  box.style.display = sel.value==='yes' ? '' : 'none';
 }
 function onRealizedRChange(){
   const r=parseFloat($('#f_realizedR')?.value);
@@ -1990,6 +2063,9 @@ function saveTrade(id){
     session:$('#f_session').value,
     moveType:$('#f_moveType').value,
     moveOther:$('#f_moveType').value==='other'?$('#f_moveOther').value.trim():'',
+    smt:$('#f_smt').value,
+    smtResult:$('#f_smt').value==='yes'?$('#f_smtResult').value:'',
+    smtTiming:$('#f_smt').value==='yes'?$('#f_smtTiming').value:'',
     account:$('#f_account').value,
     plannedR:parseFloat($('#f_plannedR').value)||0,
     realizedR:isNaN(realizedR)?0:realizedR,
