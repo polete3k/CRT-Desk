@@ -1320,11 +1320,12 @@ function renderCalendar(v, T){
     const [yy,mm,dd]=t.date.split('-').map(Number);
     if(yy===CAL_YEAR && (mm-1)===CAL_MONTH){
       const day=dd;
-      byDay[day]=byDay[day]||{pnl:0,n:0,dirty:false,r:0};
+      byDay[day]=byDay[day]||{pnl:0,n:0,dirty:false,r:0,phases:new Set()};
       byDay[day].pnl+=(t.pnl||0);
       byDay[day].r+=(t.realizedR||0);
       byDay[day].n++;
       if((t.flags||[]).some(f=>f!=='clean')) byDay[day].dirty=true;
+      const ph=tradePhase(t); if(ph) byDay[day].phases.add(ph);
     }
   });
 
@@ -1348,8 +1349,13 @@ function renderCalendar(v, T){
     const unfilledCount=ntList.filter(n=>n.type==='unfilled').length;
     if(d){
       const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
+      const phases=[...d.phases];
+      const phaseTag = phases.length===1
+        ? `<span class="phase-tag ${phases[0]}">${phases[0]==='funded'?'F':'E'}</span>`
+        : phases.length>1 ? `<span class="phase-tag mixed">E/F</span>` : '';
       cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
         <div class="daynum">${day}</div>
+        ${phaseTag}
         ${d.dirty?'<div class="flag-dot" title="día con error"></div>':''}
         ${unfilledCount?`<div class="nt-badge" title="${unfilledCount} entrada(s) no ejecutada(s)">⊘${unfilledCount>1?unfilledCount:''}</div>`:''}
         <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
@@ -1359,7 +1365,7 @@ function renderCalendar(v, T){
       cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${noday.id}')" title="${NOTRADE_REASONS[noday.reason]||''}">
         <div class="daynum">${day}</div>
         <div class="nt-mark">🚫</div>
-        <div class="meta nt-reason">${(NOTRADE_REASONS[noday.reason]||'').split(' ').slice(0,2).join(' ')}</div>
+        <div class="meta nt-reason">${NOTRADE_REASONS[noday.reason]||''}</div>
         ${unfilledCount?`<div class="nt-badge" title="${unfilledCount} entrada(s) no ejecutada(s)">⊘${unfilledCount>1?unfilledCount:''}</div>`:''}
       </div>`;
     } else if(unfilledCount){
@@ -2330,6 +2336,20 @@ function buildAIReport(){
   const st=streaks(T);
   L.push(`Racha actual: ${st.curCount} ${st.curType==='win'?'victorias':st.curType==='loss'?'derrotas':'-'} | Récord victorias: ${st.maxWin} | Récord derrotas: ${st.maxLoss}`);
   L.push('');
+  // Métricas separadas por fase (eval vs funded)
+  const evalT=T.filter(t=>tradePhase(t)==='eval');
+  const fundedT=T.filter(t=>tradePhase(t)==='funded');
+  const phaseBlock=(label,arr)=>{
+    if(!arr.length) return;
+    L.push(`--- MÉTRICAS ${label} (${arr.length} trades) ---`);
+    L.push(`Expectancy: ${fmtR(expectancy(arr))} | Win rate: ${pct(winrate(arr))} | Profit factor: ${profitFactor(arr)===Infinity?'∞':fmt(profitFactor(arr),2)}`);
+    L.push(`R acumulado: ${fmtR(arr.reduce((s,t)=>s+(t.realizedR||0),0))} | P&L: ${fmt$(totalPnl(arr))}`);
+    const c=arr.filter(t=>!(t.flags||[]).some(f=>f!=='clean'));
+    L.push(`Disciplina: ${pct(arr.length?c.length/arr.length*100:0)} limpios`);
+    L.push('');
+  };
+  phaseBlock('EVALUACIÓN', evalT);
+  phaseBlock('FUNDED', fundedT);
   // Disciplina
   const clean=T.filter(t=>!(t.flags||[]).some(f=>f!=='clean'));
   const dirty=T.filter(t=>(t.flags||[]).some(f=>f!=='clean'));
@@ -2384,6 +2404,7 @@ function buildAIReport(){
     parts.push(t.result==='win'?'GANADOR':t.result==='loss'?'PERDEDOR':'BE');
     if(t.exitType) parts.push('salida:'+t.exitType);
     if(t.account) parts.push('cuenta:'+t.account);
+    const ph=tradePhase(t); if(ph) parts.push('fase:'+(ph==='funded'?'FUNDED':'EVAL'));
     if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
     if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+t.mae+'R');
     if(t.dolReached) parts.push('DOL:'+t.dolReached);

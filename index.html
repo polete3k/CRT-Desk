@@ -194,10 +194,14 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 
 /* ---------- Phase filter ---------- */
 .cal-cell.notrade{background:rgba(138,151,168,.07);border-color:var(--line);border-style:dashed}
-.cal-cell .nt-mark{font-size:15px;margin-top:auto;opacity:.55}
+.cal-cell .nt-mark{font-size:13px;margin-top:auto;opacity:.55;line-height:1}
 .cal-cell .nt-badge{position:absolute;top:4px;right:4px;font-size:10px;color:var(--amber);font-family:var(--mono);font-weight:700}
-.cal-cell .nt-reason{font-size:8px;color:var(--ink-faint);line-height:1.2}
+.cal-cell .nt-reason{font-size:8px;color:var(--ink-faint);line-height:1.15;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
 @media(max-width:560px){.cal-cell .nt-reason{display:none}}
+.phase-tag{position:absolute;top:4px;right:4px;font-size:8px;font-weight:700;font-family:var(--mono);padding:1px 4px;border-radius:4px;line-height:1.3}
+.phase-tag.eval{background:rgba(77,159,255,.18);color:#4d9fff}
+.phase-tag.funded{background:rgba(61,220,132,.18);color:#3ddc84}
+.phase-tag.mixed{background:rgba(138,151,168,.18);color:var(--ink-dim)}
 .phase-filter{display:inline-flex;gap:3px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:4px;margin-bottom:18px}
 .phase-btn{background:transparent;border:none;color:var(--ink-dim);font-family:var(--sans);font-size:13px;font-weight:600;padding:7px 15px;border-radius:8px;cursor:pointer;transition:.14s;display:flex;align-items:center;gap:6px}
 .phase-btn:hover{color:var(--ink)}
