@@ -2310,6 +2310,110 @@ function importData(file){
   r.readAsText(file);
 }
 
+// Genera un informe de texto limpio (sin imágenes) para pegar en un chat de IA
+function buildAIReport(){
+  const T=[...DB.trades].sort((a,b)=> a.date<b.date?-1:1);
+  const L=[];
+  const pct=v=>fmt(v,1)+'%';
+  L.push('=== INFORME CRT DESK ===');
+  L.push('Fecha de exportación: '+todayISO());
+  L.push('Trader: opera futuros intradía con metodología CRT (Candle Range Theory) en prop firms.');
+  L.push('');
+  // Resumen global
+  L.push('--- MÉTRICAS GLOBALES ---');
+  L.push(`Total de trades: ${T.length}`);
+  L.push(`Expectancy: ${fmtR(expectancy(T))} por trade`);
+  L.push(`Win rate: ${pct(winrate(T))}`);
+  L.push(`Profit factor: ${profitFactor(T)===Infinity?'∞':fmt(profitFactor(T),2)}`);
+  L.push(`R acumulado: ${fmtR(T.reduce((s,t)=>s+(t.realizedR||0),0))}`);
+  L.push(`P&L total: ${fmt$(totalPnl(T))}`);
+  const st=streaks(T);
+  L.push(`Racha actual: ${st.curCount} ${st.curType==='win'?'victorias':st.curType==='loss'?'derrotas':'-'} | Récord victorias: ${st.maxWin} | Récord derrotas: ${st.maxLoss}`);
+  L.push('');
+  // Disciplina
+  const clean=T.filter(t=>!(t.flags||[]).some(f=>f!=='clean'));
+  const dirty=T.filter(t=>(t.flags||[]).some(f=>f!=='clean'));
+  L.push('--- DISCIPLINA ---');
+  L.push(`Tasa de disciplina: ${pct(T.length?clean.length/T.length*100:0)} (${clean.length} limpios / ${dirty.length} con error)`);
+  L.push(`Expectancy trades limpios: ${fmtR(expectancy(clean))} | con error: ${fmtR(expectancy(dirty))}`);
+  // errores por tipo
+  const flagCount={};
+  T.forEach(t=>(t.flags||[]).forEach(f=>{ if(f!=='clean') flagCount[f]=(flagCount[f]||0)+1; }));
+  if(Object.keys(flagCount).length){
+    L.push('Errores por tipo: '+Object.entries(flagCount).map(([k,n])=>`${FLAG_LABELS[k]||k}: ${n}`).join(', '));
+  }
+  L.push('');
+  // Desgloses
+  const bd=(key,label)=>{
+    const rows=breakdown(T,key);
+    if(!rows.length) return;
+    L.push(`Por ${label}:`);
+    rows.forEach(r=>L.push(`  - ${r.key}: ${r.n} trades, exp ${fmtR(r.exp)}, WR ${pct(r.wr)}, R acum ${fmtR(r.r)}`));
+  };
+  L.push('--- RENDIMIENTO POR CATEGORÍA ---');
+  bd('session','sesión'); bd('symbol','símbolo'); bd('setup','setup'); bd('weekday','día de la semana');
+  L.push('');
+  // Origen del movimiento
+  const withMove=T.filter(t=>t.moveType);
+  if(withMove.length){
+    L.push('Origen del movimiento (CRT):');
+    const g={}; withMove.forEach(t=>(g[t.moveType]=g[t.moveType]||[]).push(t));
+    Object.keys(g).forEach(k=>L.push(`  - ${MOVE_TYPES[k]||k}: ${g[k].length} trades, exp ${fmtR(expectancy(g[k]))}`));
+    L.push('');
+  }
+  // SMT / RS Scalp
+  const smt=T.filter(t=>t.smt==='yes'&&t.smtResult);
+  if(smt.length){
+    const tp=smt.filter(t=>t.smtResult==='tp').length;
+    L.push(`RS Scalp (SMT): ${smt.length} señales, ${pct(tp/smt.length*100)} a TP`);
+    L.push('');
+  }
+  // MFE/DOL
+  const withDol=T.filter(t=>(t.dolReached==='yes'||t.dolReached==='no')&&t.result!=='loss');
+  if(withDol.length){
+    const reached=withDol.filter(t=>t.dolReached==='yes').length;
+    L.push(`DOL: de ${withDol.length} trades no perdedores, el precio llegó al DOL final el ${pct(reached/withDol.length*100)}`);
+    L.push('');
+  }
+  // Lista de trades
+  L.push('--- LISTA DE TRADES ---');
+  T.forEach((t,i)=>{
+    const parts=[`#${i+1}`, t.date, t.symbol||'', t.session||'', t.setup||''];
+    parts.push(`R plan ${t.plannedR??'?'} / R real ${t.realizedR??'?'}`);
+    parts.push(t.result==='win'?'GANADOR':t.result==='loss'?'PERDEDOR':'BE');
+    if(t.exitType) parts.push('salida:'+t.exitType);
+    if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
+    if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+t.mae+'R');
+    if(t.dolReached) parts.push('DOL:'+t.dolReached);
+    const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
+    if(errs.length) parts.push('FLAGS: '+errs.join('/'));
+    else parts.push('limpio');
+    L.push(parts.filter(Boolean).join(' | '));
+    if(t.note) L.push('   Nota: '+t.note);
+  });
+  L.push('');
+  // No-trades y entradas no ejecutadas
+  const nts=DB.noTradeDays||[];
+  if(nts.length){
+    L.push('--- DÍAS SIN TRADE / ENTRADAS NO EJECUTADAS ---');
+    nts.forEach(n=>{
+      const tipo=n.type==='unfilled'?'Entrada no ejecutada':'Día sin operar';
+      L.push(`${n.date} | ${tipo}${n.reason?' ('+(NOTRADE_REASONS[n.reason]||n.reason)+')':''}${n.note?' — '+n.note:''}`);
+    });
+    L.push('');
+  }
+  return L.join('\n');
+}
+function exportAIReport(){
+  const report=buildAIReport();
+  const blob=new Blob([report],{type:'text/plain'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=`crtdesk-informe-${todayISO()}.txt`; a.click();
+  URL.revokeObjectURL(url);
+  toast('Informe para IA exportado');
+}
+
 /* ============================================================
    INIT
    ============================================================ */
@@ -2324,6 +2428,7 @@ function init(){
   $('#noTradeBtn').onclick=()=>openNoTradeModal();
   $('#fab').onclick=openTradeModal;
   $('#exportBtn').onclick=exportData;
+  $('#aiReportBtn').onclick=exportAIReport;
   $('#importBtn').onclick=()=>$('#fileInput').click();
   $('#fileInput').onchange=e=>{ if(e.target.files[0]) importData(e.target.files[0]); };
   // Cerrar solo si el clic empieza Y termina en el fondo (no al arrastrar desde un input)
