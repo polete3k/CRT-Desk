@@ -2380,11 +2380,16 @@ function buildAIReport(){
   T.forEach((t,i)=>{
     const parts=[`#${i+1}`, t.date, t.symbol||'', t.session||'', t.setup||''];
     parts.push(`R plan ${t.plannedR??'?'} / R real ${t.realizedR??'?'}`);
+    if(!isNaN(t.riskUSD)&&t.riskUSD) parts.push('riesgo $'+t.riskUSD);
     parts.push(t.result==='win'?'GANADOR':t.result==='loss'?'PERDEDOR':'BE');
     if(t.exitType) parts.push('salida:'+t.exitType);
+    if(t.account) parts.push('cuenta:'+t.account);
     if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
     if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+t.mae+'R');
     if(t.dolReached) parts.push('DOL:'+t.dolReached);
+    if(t.result11) parts.push('a1:1='+t.result11);
+    if(t.moveType) parts.push('mov:'+(MOVE_TYPES[t.moveType]||t.moveType)+(t.moveOther?' ('+t.moveOther+')':''));
+    if(t.smt==='yes') parts.push('SMT:'+t.smtResult+'/'+t.smtTiming);
     const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
     if(errs.length) parts.push('FLAGS: '+errs.join('/'));
     else parts.push('limpio');
