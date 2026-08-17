@@ -172,7 +172,7 @@ const HELP_TEXTS={
   avgwin:['Avg win','Tu ganancia media en los trades ganadores, en R.'],
   avgloss:['Avg loss','Tu pérdida media en los trades perdedores, en R.'],
   breakdowns:['Desgloses','Tu rendimiento separado por setup, sesión, símbolo... Sirve para ver dónde ganas de verdad y dónde pierdes.'],
-  optimalrr:['R:R óptimo','Usa tu MFE para simular qué TP te daría más rentabilidad. Marca tu DOL medio para que compares si tu óptimo cae antes, en o después del DOL.'],
+  optimalrr:['R:R óptimo','Usa tu MFE para simular qué TP te daría más rentabilidad. Marca tu DOL medio (del campo "DOL en R" que registras) para comparar si tu óptimo cae antes, en o después del DOL.'],
   manualclose:['Cierres manuales','Analiza tus cierres antes del TP. Respeta tu criterio: si marcaste "limpio", fue buena decisión. Solo cuenta como coste los que marcaste con error.'],
   dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
   beanalysis:['Análisis de BE','De tus salidas por BE saltado: cuántos moviste según plan vs por impulso, y cuántos habrían ido a TP (usando el MFE). Te dice si mover el BE pronto te cuesta ganadores.'],
@@ -325,9 +325,11 @@ function optimalRR(trades){
   });
   const best = curve.reduce((a,b)=> b.exp>a.exp?b:a, curve[0]);
   // DOL medio en R: MFE medio de los trades donde SÍ llegó al DOL final
-  const dolTrades = withMfe.filter(t=>t.dolReached==='yes');
-  const avgDol = dolTrades.length? dolTrades.reduce((s,t)=>s+t.mfe,0)/dolTrades.length : null;
-  return { enough:true, n:withMfe.length, curve, best, avgDol };
+  // DOL medio en R: media del campo dolR real (registrado por el trader), no del MFE.
+  // El MFE sobreestima porque el precio a veces pasa de largo del DOL.
+  const dolTrades = trades.filter(t=>!isNaN(t.dolR)&&t.dolR!=null&&t.dolR>0);
+  const avgDol = dolTrades.length? dolTrades.reduce((s,t)=>s+t.dolR,0)/dolTrades.length : null;
+  return { enough:true, n:withMfe.length, curve, best, avgDol, dolN:dolTrades.length };
 }
 
 
@@ -780,13 +782,13 @@ function renderPerformance(v, T){
           <div class="calc-out">
             <div class="label" style="font-size:11px;color:var(--ink-dim);font-weight:600;margin-bottom:6px">TU DOL MEDIO</div>
             <div class="big" style="color:var(--blue)">${o.avgDol!=null?'1:'+fmt(o.avgDol,1).replace('.0',''):'—'}</div>
-            <div class="hint" style="margin-top:6px">${o.avgDol!=null?'hasta dónde llega tu DOL':'marca "llegó al DOL" en tus trades'}</div>
+            <div class="hint" style="margin-top:6px">${o.avgDol!=null?'media real de tu DOL ('+o.dolN+' trades)':'registra "DOL en R" en tus trades'}</div>
           </div>
         </div>
         <div style="position:relative;height:220px"><canvas id="rrChart"></canvas></div>
         <div class="legend"><span><span class="dot" style="background:var(--green)"></span>Expectancy por R:R</span>${o.avgDol!=null?'<span><span class="dot" style="background:var(--blue)"></span>Tu DOL medio</span>':''}</div>
         ${(()=>{
-          if(o.avgDol==null) return `<div class="insight" style="margin-top:12px">Marca "¿llegó al DOL final?" en tus trades para ver si tu R:R óptimo cae antes, en, o después de tu DOL.</div>`;
+          if(o.avgDol==null) return `<div class="insight" style="margin-top:12px">Registra "DOL en R" en tus trades (a cuántos R está tu DOL) para ver si tu R:R óptimo cae antes, en, o después de tu DOL.</div>`;
           const diff=o.best.tp-o.avgDol;
           if(Math.abs(diff)<=0.25) return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) coincide casi con tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). <b>Tu estructura es correcta</b>: el DOL es exactamente donde más rentabilidad sacas.</div>`;
           if(diff<0) return `<div class="insight warn" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) cae <b>antes</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). El precio no siempre llega al DOL, así que cerrar un poco antes te daría más rentabilidad a la larga. Plantéate asegurar antes del DOL.</div>`;
@@ -1784,9 +1786,13 @@ function tradeModal(t){
           <option value="no" ${e.dolReached==='no'?'selected':''}>No, se quedó corto</option>
         </select>
       </div>
-      <div class="field"><label>R máximo alcanzado (MFE) <span class="hint">a favor</span></label>
-        <input type="number" id="f_mfe" step="0.1" value="${e.mfe??''}" placeholder="ex. 2.3">
+      <div class="field"><label>DOL en R <span class="hint">a cuántos R estaba tu DOL</span></label>
+        <input type="number" id="f_dolR" step="0.1" min="0" value="${e.dolR??''}" placeholder="ex. 2.0">
       </div>
+    </div>
+    <div class="hint" style="margin:-6px 0 12px">DOL en R = la distancia de tu DOL final respecto a tu entrada, en R. Lo sabes al entrar (dónde está el DOL / dónde tu stop). Es el dato real de dónde está tu objetivo, no dónde llegó el precio.</div>
+    <div class="field"><label>R máximo alcanzado (MFE) <span class="hint">a favor</span></label>
+      <input type="number" id="f_mfe" step="0.1" value="${e.mfe??''}" placeholder="ex. 2.3">
     </div>
     <div class="hint" style="margin:-6px 0 12px">MFE = hasta qué R se movió el precio a tu favor, aunque no lo cobraras. <b>En un SL también importa</b>: te dice si acertaste dirección pero te sacaron, o si la entrada estaba mal.</div>
     <div class="field"><label>R máximo en contra (MAE) <span class="hint">cuánto sufrió antes de resolverse</span></label>
@@ -2008,6 +2014,7 @@ function saveTrade(id){
     exitType:$('#f_exitType').value,
     result11:existing?.result11||'',
     dolReached:$('#f_dolReached').value,
+    dolR:parseFloat($('#f_dolR').value),
     mfe:parseFloat($('#f_mfe').value),
     mae:parseFloat($('#f_mae').value),
     flags:[...flags],
@@ -2335,6 +2342,7 @@ function buildAIReport(){
     if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
     if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+t.mae+'R');
     if(t.dolReached) parts.push('DOL:'+t.dolReached);
+    if(!isNaN(t.dolR)&&t.dolR!=null) parts.push('DOL@'+t.dolR+'R');
     if(t.moveType) parts.push('mov:'+(MOVE_TYPES[t.moveType]||t.moveType)+(t.moveOther?' ('+t.moveOther+')':''));
     if(t.smt==='yes') parts.push('SMT:'+t.smtResult+'/'+t.smtTiming);
     const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
