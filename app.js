@@ -172,7 +172,6 @@ const HELP_TEXTS={
   avgwin:['Avg win','Tu ganancia media en los trades ganadores, en R.'],
   avgloss:['Avg loss','Tu pérdida media en los trades perdedores, en R.'],
   breakdowns:['Desgloses','Tu rendimiento separado por setup, sesión, símbolo... Sirve para ver dónde ganas de verdad y dónde pierdes.'],
-  comparador:['Comparador de R:R','Con tus datos reales, calcula qué ratio (1:1 vs 1:1,5) te habría hecho ganar más. Solo cuenta trades donde registraste ambos resultados.'],
   optimalrr:['R:R óptimo','Usa tu MFE para simular qué TP te daría más rentabilidad. Marca tu DOL medio para que compares si tu óptimo cae antes, en o después del DOL.'],
   manualclose:['Cierres manuales','Analiza tus cierres antes del TP. Respeta tu criterio: si marcaste "limpio", fue buena decisión. Solo cuenta como coste los que marcaste con error.'],
   dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
@@ -306,37 +305,6 @@ function dayDisciplineBreakdown(trades){
     const errRate = ts.length? ts.filter(t=>(t.flags||[]).some(f=>f!=='clean')).length/ts.length*100 : 0;
     return { key:k, n:ts.length, exp:expectancy(ts), wr:winrate(ts), errRate };
   });
-}
-
-/* ---------- Comparador de R:R ----------
-   Simula el resultado de cada trade bajo un ratio dado.
-   - Escenario real (1:1,5): usa realizedR tal cual.
-   - Escenario 1:1: usa result11. TP=+1R, SL=-1R, BE=0.
-   Solo cuenta trades que tengan result11 registrado. */
-function scenarioStats(trades, mode){
-  // mode: 'real' | '1:1'
-  const valid = mode==='1:1' ? trades.filter(t=>t.result11) : trades;
-  if(!valid.length) return {n:0,exp:0,wr:0,totalR:0,pnl:0};
-  let sumR=0, wins=0, counted=0, pnl=0;
-  valid.forEach(t=>{
-    let r;
-    if(mode==='1:1'){
-      r = t.result11==='win'?1 : t.result11==='loss'?-1 : 0;
-    } else {
-      r = t.realizedR||0;
-    }
-    sumR+=r;
-    pnl += r*(t.riskUSD||0);
-    if(t.result11!=='be' && mode==='1:1'){ counted++; if(r>0)wins++; }
-    else if(mode==='real' && t.result!=='be'){ counted++; if(r>0)wins++; }
-  });
-  return {
-    n:valid.length,
-    exp:sumR/valid.length,
-    wr: counted? wins/counted*100 : 0,
-    totalR:sumR,
-    pnl
-  };
 }
 
 /* ---------- R:R óptimo según MFE ----------
@@ -794,39 +762,6 @@ function renderPerformance(v, T){
           Los SMT van a TP el <b>${fmt(wr,0)}%</b> de las veces (${smt.length} señales). ${byTiming.length>=2?`Tu mejor timing es <b>${byTiming[0].label}</b> (${fmt(byTiming[0].wr,0)}% acierto). ${byTiming[0].wr-byTiming[byTiming.length-1].wr>=25?'La diferencia entre timings es notable — prioriza el mejor.':'Los timings rinden parecido de momento.'}`:''}
           ${smt.length<15?' ⚠ Aún pocos datos: no saques conclusiones firmes hasta 15-20 señales.':''}
         </div>`:''}
-        `;
-      })()}
-    </div>
-    <div class="card" style="margin-bottom:14px">
-      <h3>Comparador de R:R — tu 1:1,5 vs 1:1 ${helpIcon("comparador")}</h3>
-      ${(()=>{
-        const real=scenarioStats(T,'real');
-        const withData=T.filter(t=>t.result11);
-        if(withData.length<3) return `<p class="hint">Necesitas al menos 3 trades con el resultado a 1:1 registrado para comparar. Llevas ${withData.length}. Ve marcando "¿Qué habría pasado a 1:1?" al registrar cada trade.</p>`;
-        // comparar SOLO sobre los trades que tienen ambos datos, para ser justos
-        const realSub=scenarioStats(withData,'real');
-        const alt=scenarioStats(withData,'1:1');
-        const better = realSub.pnl>=alt.pnl ? 'real' : '1:1';
-        const diff=Math.abs(realSub.pnl-alt.pnl);
-        return `
-        <div class="grid g-2">
-          <div class="calc-out" style="${better==='real'?'border-color:var(--green-dim)':''}">
-            <div class="label" style="font-size:11px;font-weight:600;margin-bottom:6px;color:${better==='real'?'var(--green)':'var(--ink-dim)'}">TU 1:1,5 ${better==='real'?'👑':''}</div>
-            <div class="big ${cls(realSub.pnl)}">${fmt$(realSub.pnl)}</div>
-            <div class="hint" style="margin-top:8px">Exp ${fmtR(realSub.exp)} · WR ${fmt(realSub.wr,0)}% · ${fmtR(realSub.totalR)}</div>
-          </div>
-          <div class="calc-out" style="${better==='1:1'?'border-color:var(--green-dim)':''}">
-            <div class="label" style="font-size:11px;font-weight:600;margin-bottom:6px;color:${better==='1:1'?'var(--green)':'var(--ink-dim)'}">A 1:1 ${better==='1:1'?'👑':''}</div>
-            <div class="big ${cls(alt.pnl)}">${fmt$(alt.pnl)}</div>
-            <div class="hint" style="margin-top:8px">Exp ${fmtR(alt.exp)} · WR ${fmt(alt.wr,0)}% · ${fmtR(alt.totalR)}</div>
-          </div>
-        </div>
-        <div class="insight ${better==='real'?'':'warn'}" style="margin-top:14px">
-          Sobre ${withData.length} trades comparables, ${better==='real'
-            ? `tu <b>1:1,5 rinde mejor</b>: ${fmt$(diff)} más que ir a 1:1. Tu ratio actual es el correcto.`
-            : `ir a <b>1:1 habría rendido ${fmt$(diff)} más</b>. El winrate más alto compensa el objetivo más corto. Plantéate probar 1:1 en una parte de tu size.`}
-        </div>
-        <div class="hint" style="margin-top:8px">Comparación justa: solo cuenta los ${withData.length} trades donde registraste ambos resultados.</div>
         `;
       })()}
     </div>
@@ -1841,15 +1776,6 @@ function tradeModal(t){
       </select>
       <div class="hint" style="margin-top:5px">Lo que de verdad cuenta para tus métricas es el <b>R realizado</b> de arriba. Esto solo clasifica cómo cerraste.</div>
     </div>
-    <div class="field">
-      <label>¿Qué habría pasado a 1:1? <span class="hint">(¿el precio tocó tu +1R antes de resolverse?)</span></label>
-      <select id="f_result11">
-        <option value="" ${!e.result11?'selected':''}>— no registrado —</option>
-        <option value="win" ${e.result11==='win'?'selected':''}>TP a 1:1 (habría ganado +1R)</option>
-        <option value="loss" ${e.result11==='loss'?'selected':''}>SL a 1:1 (se fue al stop sin tocar 1R)</option>
-        <option value="be" ${e.result11==='be'?'selected':''}>BE a 1:1</option>
-      </select>
-    </div>
     <div class="field-row">
       <div class="field" id="f_dolWrap"><label>¿Llegó al DOL final?</label>
         <select id="f_dolReached">
@@ -2061,6 +1987,7 @@ function toggleFlag(k){
 function saveTrade(id){
   const flags=$('#modalBg')._flags;
   const realizedR=parseFloat($('#f_realizedR').value);
+  const existing=id?DB.trades.find(x=>x.id===id):null;
   const t={
     id:id||uid(),
     date:$('#f_date').value,
@@ -2079,7 +2006,7 @@ function saveTrade(id){
     pnl:parseFloat($('#f_pnl').value)|| ((isNaN(realizedR)?0:realizedR)*(parseFloat($('#f_riskUSD').value)||0)),
     result:resultFromR(realizedR)||'be',
     exitType:$('#f_exitType').value,
-    result11:$('#f_result11').value,
+    result11:existing?.result11||'',
     dolReached:$('#f_dolReached').value,
     mfe:parseFloat($('#f_mfe').value),
     mae:parseFloat($('#f_mae').value),
@@ -2408,7 +2335,6 @@ function buildAIReport(){
     if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
     if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+t.mae+'R');
     if(t.dolReached) parts.push('DOL:'+t.dolReached);
-    if(t.result11) parts.push('a1:1='+t.result11);
     if(t.moveType) parts.push('mov:'+(MOVE_TYPES[t.moveType]||t.moveType)+(t.moveOther?' ('+t.moveOther+')':''));
     if(t.smt==='yes') parts.push('SMT:'+t.smtResult+'/'+t.smtTiming);
     const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
