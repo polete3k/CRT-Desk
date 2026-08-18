@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0a0e14">
-<title>CRT Desk — Futures Prop Tracker</title>
+<title>Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%2311161f%22/><text x=%2250%22 y=%2270%22 font-size=%2256%22 text-anchor=%22middle%22>📊</text></svg>">
 <link rel="manifest" href="manifest.json">
 <style>
 :root{
@@ -37,7 +39,7 @@ body{padding-bottom:env(safe-area-inset-bottom)}
 header.topbar{position:sticky;top:0;z-index:50;background:rgba(10,14,20,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;padding:14px 16px;margin:0 -16px 20px}
 .brand{display:flex;align-items:center;gap:11px}
-.brand .mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--green),#2a9d63);display:grid;place-items:center;font-family:var(--mono);font-weight:700;color:#04210f;font-size:15px}
+.brand .mark{width:34px;height:34px;border-radius:9px;background:var(--panel-2,#161c27);display:grid;place-items:center;font-size:19px;border:1px solid var(--line)}
 .brand h1{font-size:15px;font-weight:700;letter-spacing:-.01em}
 .brand .sub{font-size:11px;color:var(--ink-faint);font-family:var(--mono);letter-spacing:.02em}
 .topbar-actions{display:flex;gap:8px;align-items:center}
@@ -228,10 +230,9 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 <div class="app">
   <header class="topbar">
     <div class="brand">
-      <div class="mark">CR</div>
+      <div class="mark">📊</div>
       <div>
-        <h1>CRT Desk</h1>
-        <div class="sub">FUTURES · PROP · INTRADAY</div>
+        <h1>Dashboard</h1>
       </div>
     </div>
     <div class="topbar-actions">

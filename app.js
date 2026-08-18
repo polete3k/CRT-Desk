@@ -184,6 +184,7 @@ const HELP_TEXTS={
   distribution:['Distribución de R','Cuántos trades caen en cada rango de R. La altura es número de trades. Muestra la forma de tus resultados.'],
   streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
   daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
+  bymonth:['Rendimiento por mes','Tu expectancy, winrate, R acumulado y % de errores mes a mes. Sirve para ver tu evolución en el tiempo y si vas mejorando.'],
   // Sizing
   kelly:['Kelly','Termómetro de tu edge, no tu sizing. Valida si tienes ventaja real. Necesita 30+ trades para ser fiable.'],
   roiglobal:['ROI global','Tu negocio de props: total gastado en cuentas vs total cobrado en payouts. El ROI % te dice cuánto recuperas por cada $ invertido.'],
@@ -310,6 +311,26 @@ function dayDisciplineBreakdown(trades){
     const errRate = ts.length? ts.filter(t=>(t.flags||[]).some(f=>f!=='clean')).length/ts.length*100 : 0;
     return { key:k, n:ts.length, exp:expectancy(ts), wr:winrate(ts), errRate };
   });
+}
+
+// Rendimiento por mes: expectancy, winrate, R acumulado, nº trades
+function monthBreakdown(trades){
+  const names=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const map={};
+  trades.forEach(t=>{
+    const [yy,mm]=t.date.split('-').map(Number);
+    const k=`${names[mm-1]} ${String(yy).slice(2)}`;
+    const sortKey=yy*100+mm;
+    map[k]=map[k]||{ts:[],sortKey};
+    map[k].ts.push(t);
+  });
+  return Object.keys(map)
+    .sort((a,b)=>map[a].sortKey-map[b].sortKey)
+    .map(k=>{
+      const ts=map[k].ts;
+      const errRate = ts.length? ts.filter(t=>(t.flags||[]).some(f=>f!=='clean')).length/ts.length*100 : 0;
+      return { key:k, n:ts.length, exp:expectancy(ts), wr:winrate(ts), r:ts.reduce((s,t)=>s+(t.realizedR||0),0), errRate };
+    });
 }
 
 /* ---------- R:R óptimo según MFE ----------
@@ -976,6 +997,27 @@ function renderPerformance(v, T){
           ${rows.length>=2?`<div class="insight" style="margin-top:12px">Mejor día: <b>${best.key}</b> (${fmtR(best.exp)}). Peor: <b>${worst.key}</b> (${fmtR(worst.exp)}${worst.errRate>30?`, con ${fmt(worst.errRate,0)}% de trades con error`:''}). ${worst.errRate>30?'Si el peor día coincide con más errores, quizá el problema eres tú ese día, no el mercado.':''}</div>`:''}`;
         })()}
       </div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Rendimiento por mes ${helpIcon("bymonth")}</h3>
+      ${(()=>{
+        const rows=monthBreakdown(T);
+        if(!rows.length) return '<p class="hint">Sin datos suficientes.</p>';
+        const best=[...rows].sort((a,b)=>b.exp-a.exp)[0];
+        const worst=[...rows].sort((a,b)=>a.exp-b.exp)[0];
+        return `<div class="table-wrap" style="border:none"><table style="min-width:auto">
+          <thead><tr><th>Mes</th><th>N</th><th>Exp</th><th>WR</th><th>R acum</th><th>% error</th></tr></thead>
+          <tbody>${rows.map(r=>`<tr>
+            <td style="font-family:var(--sans);font-weight:600">${r.key}</td>
+            <td>${r.n}</td>
+            <td class="${cls(r.exp)}">${fmtR(r.exp)}</td>
+            <td>${fmt(r.wr,0)}%</td>
+            <td class="${cls(r.r)}">${fmtR(r.r)}</td>
+            <td class="${r.errRate>30?'neg':r.errRate>0?'':'pos'}">${fmt(r.errRate,0)}%</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        ${rows.length>=2?`<div class="insight" style="margin-top:12px">Mejor mes: <b>${best.key}</b> (${fmtR(best.exp)} de expectancy). Peor: <b>${worst.key}</b> (${fmtR(worst.exp)}). Te ayuda a ver tu evolución y si vas mejorando con el tiempo.</div>`:''}`;
+      })()}
     </div>
     ${kellyCard(T)}
   `;
