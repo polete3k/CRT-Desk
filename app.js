@@ -1023,7 +1023,56 @@ function kellyCard(T){
 /* ============================================================
    ACCOUNTS & PAYOUTS
    ============================================================ */
+// Detecta cuentas que han llegado al target (eval) o tocado el MLL, y avisa para cambiar de estado.
+// Solo avanza estados, respeta los marcados manualmente ('payout', 'perdida' no se tocan).
+let _autoAsked=new Set(); // en memoria: no repreguntar en la misma sesión si el usuario dijo que no
+function checkAccountAutoStatus(){
+  const T=DB.trades;
+  let changed=false;
+  (DB.accounts||[]).forEach(a=>{
+    const st=a.status||'en_curso';
+    // no tocar cuentas ya en un estado final marcado por el usuario
+    if(st==='payout'||st==='perdida') return;
+    const spec=planSpec(a.firm,a.plan,a.phase)||{};
+    const aTrades=T.filter(t=>t.account===a.name);
+    const realized=totalPnl(aTrades);
+    const balance=(a.startBalance||0)+realized;
+    const dd=spec.drawdown||0;
+    const trailLock=spec.trailLock||0, lockedFloor=spec.lockedFloor||0;
+    // Suelo trailing: sube con el pico de balance alcanzado, nunca baja.
+    // Reconstruimos el pico acumulando los trades en orden.
+    const startBal=a.startBalance||0;
+    let running=startBal, peak=startBal;
+    aTrades.slice().sort((x,y)=> x.date<y.date?-1:1).forEach(t=>{ running+=(t.pnl||0); if(running>peak) peak=running; });
+    let floor;
+    if(trailLock && peak>=trailLock) floor=lockedFloor;
+    else floor=peak-dd;
+    // 1) ¿Tocó el MLL? (cualquier cuenta viva) — el balance actual cae por debajo del suelo trailing
+    if(dd && balance<=floor && !_autoAsked.has(a.id+':lost')){
+      _autoAsked.add(a.id+':lost');
+      if(confirm(`La cuenta "${a.name}" ha tocado su límite de pérdida (balance ${fmt$(balance)} ≤ suelo ${fmt$(floor)}).\n\n¿Marcarla como PERDIDA?`)){
+        a.status='perdida'; changed=true;
+      }
+      return;
+    }
+    // 2) ¿Eval que llegó al target?
+    const target=spec.profitTarget||0;
+    if(a.phase==='Evaluación' && target && realized>=target && !_autoAsked.has(a.id+':funded')){
+      _autoAsked.add(a.id+':funded');
+      if(confirm(`La cuenta "${a.name}" ha alcanzado su profit target (${fmt$(realized)} ≥ ${fmt$(target)}).\n\n¿Pasarla a FONDEADA? Se actualizarán sus reglas (nuevo drawdown, sin target) y el balance de inicio pasará a ser el actual.`)){
+        a.phase='Funded';
+        a.status='fondeada';
+        // el balance de arranque en funded es el balance actual alcanzado
+        a.startBalance=balance;
+        changed=true;
+      }
+    }
+  });
+  if(changed) save();
+}
+
 function renderROI(v, T){
+  checkAccountAutoStatus();
   const accts = DB.accounts;
   const costs = DB.propCosts||[];
   const payouts = DB.payouts||[];
@@ -1161,6 +1210,7 @@ function renderROI(v, T){
           </div>
           <div style="display:flex;gap:6px">
             <span class="tag ${ddPct>40?'ok':ddPct>20?'warn':'bad'}">DD ${fmt(ddPct,0)}%</span>
+            ${(st==='fondeada'||st==='payout')?`<button class="btn ghost sm icon" onclick="adjustBalance('${a.id}')" title="Reajustar balance (tras payout)">💰</button>`:''}
             <button class="btn ghost sm icon" onclick="editAccount('${a.id}')" title="Editar">✎</button>
           </div>
         </div>
@@ -2085,6 +2135,20 @@ function saveAccount(id){
 function deleteAccount(id){
   if(!confirm('¿Eliminar esta cuenta?'))return;
   DB.accounts=DB.accounts.filter(a=>a.id!==id); save(); closeModal(); render(); toast('Cuenta eliminada');
+}
+// Reajustar el balance de una cuenta a mano (p.ej. tras un payout, el dinero sale de la cuenta)
+function adjustBalance(id){
+  const a=DB.accounts.find(x=>x.id===id); if(!a) return;
+  const aTrades=DB.trades.filter(t=>t.account===a.name);
+  const realized=totalPnl(aTrades);
+  const currentBalance=(a.startBalance||0)+realized;
+  const input=prompt(`Balance actual de "${a.name}": ${fmt$(currentBalance)}\n\nEscribe el NUEVO balance tras el payout (el dinero retirado sale de la cuenta):`, Math.round(currentBalance));
+  if(input===null) return;
+  const nb=parseFloat(input);
+  if(isNaN(nb)||nb<0){ toast('Balance no válido'); return; }
+  // ajustamos startBalance para que startBalance + realized = nuevo balance
+  a.startBalance = nb - realized;
+  save(); render(); toast('Balance reajustado');
 }
 
 // ---- Costes y payouts ----
