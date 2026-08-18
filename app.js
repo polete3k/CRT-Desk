@@ -229,6 +229,9 @@ let PHASE_FILTER = 'all';
 
 // Resuelve la fase de un trade a partir de la cuenta asignada
 function tradePhase(t){
+  // La fase se guarda en el trade al crearlo. Los trades viejos sin phase
+  // la deducen de la fase actual de la cuenta (compatibilidad).
+  if(t.phase==='funded'||t.phase==='eval') return t.phase;
   if(!t.account) return null;
   const acc = DB.accounts.find(a=>a.name===t.account);
   if(!acc) return null;
@@ -1034,7 +1037,11 @@ function checkAccountAutoStatus(){
     // no tocar cuentas ya en un estado final marcado por el usuario
     if(st==='payout'||st==='perdida') return;
     const spec=planSpec(a.firm,a.plan,a.phase)||{};
-    const aTrades=T.filter(t=>t.account===a.name);
+    const allAcctTrades=T.filter(t=>t.account===a.name);
+    // Para cuentas funded, solo cuentan los trades de fase funded
+    const aTrades = a.phase==='Funded'
+      ? allAcctTrades.filter(t=>tradePhase(t)==='funded')
+      : allAcctTrades;
     const realized=totalPnl(aTrades);
     const balance=(a.startBalance||0)+realized;
     const dd=spec.drawdown||0;
@@ -1059,11 +1066,13 @@ function checkAccountAutoStatus(){
     const target=spec.profitTarget||0;
     if(a.phase==='Evaluación' && target && realized>=target && !_autoAsked.has(a.id+':funded')){
       _autoAsked.add(a.id+':funded');
-      if(confirm(`La cuenta "${a.name}" ha alcanzado su profit target (${fmt$(realized)} ≥ ${fmt$(target)}).\n\n¿Pasarla a FONDEADA? Se actualizarán sus reglas (nuevo drawdown, sin target) y el balance de inicio pasará a ser el actual.`)){
+      if(confirm(`La cuenta "${a.name}" ha alcanzado su profit target (${fmt$(realized)} ≥ ${fmt$(target)}).\n\n¿Pasarla a FONDEADA? Se actualizarán sus reglas (nuevo drawdown, sin target) y el balance arrancará limpio en el tamaño base de la cuenta.`)){
         a.phase='Funded';
         a.status='fondeada';
-        // el balance de arranque en funded es el balance actual alcanzado
-        a.startBalance=balance;
+        // La cuenta funded arranca LIMPIA en su tamaño base. Los trades de la eval
+        // no cuentan (eran simulados para pasar). El nuevo spec funded da el tamaño.
+        const fundedSpec=planSpec(a.firm,a.plan,'Funded')||{};
+        a.startBalance = fundedSpec.size || a.size || a.startBalance;
         changed=true;
       }
     }
@@ -1159,7 +1168,12 @@ function renderROI(v, T){
     ${!accts.length?`<div class="empty"><div class="ico">▤</div><p class="hint">Sin cuentas. Añade una de tus firmas (LucidFlex, Topstep, MyFundedFutures, FundedNext...) y las reglas se cargan solas.</p><button class="btn primary" style="margin-top:14px" onclick="openAccountModal()">+ Añadir cuenta</button></div>`:
     accts.map(a=>{
       const spec = planSpec(a.firm, a.plan, a.phase) || {};
-      const aTrades = T.filter(t=>t.account===a.name);
+      // Trades de esta cuenta. Si la cuenta es funded, solo cuentan los trades
+      // hechos en fase funded (los de la eval no suman al balance real).
+      const allAcctTrades = T.filter(t=>t.account===a.name);
+      const aTrades = a.phase==='Funded'
+        ? allAcctTrades.filter(t=>tradePhase(t)==='funded')
+        : allAcctTrades;
       const realized = totalPnl(aTrades);
       const balance = (a.startBalance||0)+realized;
       const dd = spec.drawdown||0;
@@ -1772,7 +1786,10 @@ function tradeModal(t){
         </div>
       </div>
     </div>
-    <div class="field"><label>Cuenta</label><select id="f_account"><option value="">— sin asignar —</option>${DB.accounts.map(a=>`<option ${e.account===a.name?'selected':''}>${a.name}</option>`).join('')}</select></div>
+    <div class="field"><label>Cuenta</label><select id="f_account"><option value="">— sin asignar —</option>${DB.accounts.map(a=>{
+      const tag = a.phase==='Funded'?' (fondeada)':' (eval)';
+      return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}</option>`;
+    }).join('')}</select></div>
     <div class="field-row-3">
       <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
       <div class="field"><label>R realizado <span class="hint">lo que sacaste</span></label><input type="number" id="f_realizedR" step="0.1" value="${e.realizedR??''}" oninput="onRealizedRChange()" placeholder="-1 / 0 / 1.5"></div>
@@ -2020,6 +2037,7 @@ function saveTrade(id){
     smtResult:$('#f_smt').value==='yes'?$('#f_smtResult').value:'',
     smtTiming:$('#f_smt').value==='yes'?$('#f_smtTiming').value:'',
     account:$('#f_account').value,
+    phase:existing?.phase || (()=>{ const acc=DB.accounts.find(a=>a.name===$('#f_account').value); return acc? (acc.phase==='Funded'?'funded':'eval') : ''; })(),
     plannedR:parseFloat($('#f_plannedR').value)||0,
     realizedR:isNaN(realizedR)?0:realizedR,
     riskUSD:parseFloat($('#f_riskUSD').value)||0,
@@ -2139,7 +2157,10 @@ function deleteAccount(id){
 // Reajustar el balance de una cuenta a mano (p.ej. tras un payout, el dinero sale de la cuenta)
 function adjustBalance(id){
   const a=DB.accounts.find(x=>x.id===id); if(!a) return;
-  const aTrades=DB.trades.filter(t=>t.account===a.name);
+  const allAcctTrades=DB.trades.filter(t=>t.account===a.name);
+  const aTrades = a.phase==='Funded'
+    ? allAcctTrades.filter(t=>tradePhase(t)==='funded')
+    : allAcctTrades;
   const realized=totalPnl(aTrades);
   const currentBalance=(a.startBalance||0)+realized;
   const input=prompt(`Balance actual de "${a.name}": ${fmt$(currentBalance)}\n\nEscribe el NUEVO balance tras el payout (el dinero retirado sale de la cuenta):`, Math.round(currentBalance));
