@@ -72,6 +72,8 @@ const DEFAULTS = {
   trades: [],
   accounts: [],
   noTradeDays: [],   // {id, date, reason, note}
+  propCosts: [],     // {id, date, amount, concept, firm}
+  payouts: [],       // {id, date, amount, concept, firm}
   firms: null,   // se inicializa desde FIRM_PRESETS la primera vez (así el usuario puede editarlas)
   settings: { riskPerTradePct: 25 },
   meta: { created: Date.now() }
@@ -183,9 +185,9 @@ const HELP_TEXTS={
   streaks:['Rachas','Tu racha actual y tus récords de victorias y derrotas seguidas. Ayuda con la psicología: saber tu peor racha histórica te calma cuando encadenas pérdidas.'],
   daydisc:['Día + disciplina','Tu rendimiento y % de errores por día de la semana. Te dice si un mal día es por el mercado o porque tú operas peor ese día.'],
   // Sizing
-  sizingcalc:['Calculadora de sizing','Te dice cuántos contratos poner según tu margen hasta el drawdown y tu stop. Pon el riesgo en $ directo o deja que use un % del margen.'],
   kelly:['Kelly','Termómetro de tu edge, no tu sizing. Valida si tienes ventaja real. Necesita 30+ trades para ser fiable.'],
-  payoutproj:['Proyección de payout','Estima cuántas semanas tardarás en poder cobrar y cuánto, según tu profit diario y días ganadores por semana.']
+  roiglobal:['ROI global','Tu negocio de props: total gastado en cuentas vs total cobrado en payouts. El ROI % te dice cuánto recuperas por cada $ invertido.'],
+  funnel:['Embudo de cuentas','El recorrido de tus cuentas: cuántas pasaste (% aprobación), de las fondeadas cuántas dieron payout (% conversión), y el payout medio. Se calcula con el estado de cada cuenta.']
 };
 let _helpOpen=null;
 function helpIcon(key){ return `<span class="help" onclick="showHelp(event,'${key}')">?</span>`; }
@@ -436,7 +438,7 @@ function render(){
   const metricTabs=['overview','discipline','performance'];
   const showFilter = metricTabs.includes(CURRENT_TAB);
   const hasNoTrade=(DB.noTradeDays||[]).length>0;
-  if(CURRENT_TAB!=='accounts' && CURRENT_TAB!=='capital' && !T.length && !(CURRENT_TAB==='calendar'&&hasNoTrade)){
+  if(CURRENT_TAB!=='roi' && !T.length && !(CURRENT_TAB==='calendar'&&hasNoTrade)){
     v.innerHTML = (showFilter?phaseFilterBar():'') + emptyState();
     return;
   }
@@ -444,8 +446,7 @@ function render(){
     overview:renderOverview,
     discipline:renderDiscipline,
     performance:renderPerformance,
-    capital:renderCapital,
-    accounts:renderAccounts,
+    roi:renderROI,
     calendar:renderCalendar,
     journal:renderJournal
   })[CURRENT_TAB](v, T);
@@ -973,6 +974,7 @@ function renderPerformance(v, T){
         })()}
       </div>
     </div>
+    ${kellyCard(T)}
   `;
   drawDistribution('distChart', T);
   drawRRCurve('rrChart', T);
@@ -1003,36 +1005,11 @@ function selectedSpec(selId){
   return planSpec(firm,plan,phase);
 }
 
-function renderCapital(v, T){
+// Kelly como termómetro de edge — se muestra en Rendimiento
+function kellyCard(T){
   const k = kellyFraction(T);
   const halfK = k/2, quarterK = k/4;
-
-  v.innerHTML=`
-    <div class="section-title">Sizing</div>
-
-    <div class="insight" style="margin-bottom:16px">
-      Todas tus firmas usan <b>trailing EOD</b>: el suelo sube con tu balance de cierre. El sizing se calcula sobre tu <b>margen actual hasta el drawdown</b>. Si tu plan tiene daily loss limit, respétalo también — la calculadora te avisa.
-    </div>
-
-    <div class="card" style="margin-bottom:14px">
-      <h3>Calculadora de sizing por margen al drawdown ${helpIcon("sizingcalc")}</h3>
-      <div class="field-row">
-        <div class="field"><label>Cuenta</label><select id="szAcct" onchange="szAcctChange()">${planOptionsHTML('szAcct')}</select></div>
-        <div class="field"><label>Balance de cierre actual ($)</label><input type="number" id="szBal" value="" oninput="calcSize()"></div>
-      </div>
-      <div class="field-row-3">
-        <div class="field"><label>Riesgo ($) o % del margen</label><input type="number" id="szRiskUSD" value="" placeholder="ex. 660" oninput="calcSize()"></div>
-        <div class="field"><label>Stop (puntos)</label><input type="number" id="szPoints" value="60" oninput="calcSize()"></div>
-        <div class="field"><label>Valor por punto ($)</label><input type="number" id="szPtVal" value="2" step="0.01" oninput="calcSize()"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Riesgo máx/trade (% del margen, si dejas $ vacío)</label><input type="number" id="szPct" value="25" oninput="calcSize()"></div>
-        <div class="field"><label>Máx. stops/sesión</label><input type="number" id="szMaxStops" value="2" oninput="calcSize()"></div>
-      </div>
-      <div class="hint" style="margin:-4px 0 12px">Valor por punto: MNQ $2 · MES $5 · MYM $0.50 · M2K $5 · M6E $12.50 · NQ $20 · ES $50 · YM $5. (1 punt MNQ = 4 ticks × $0.50 = $2)</div>
-      <div class="calc-out" id="szOut"></div>
-    </div>
-
+  return `
     <div class="card" style="margin-bottom:14px">
       <h3>Validación de edge (Kelly) ${helpIcon("kelly")}</h3>
       <div class="grid g-3">
@@ -1041,106 +1018,90 @@ function renderCapital(v, T){
         ${statCard('¼ Kelly', T.length>=30?fmt(quarterK*100,1)+'%':'n/a','mínima varianza','neu')}
       </div>
       <div class="insight" style="margin-top:14px">Kelly aquí es solo un termómetro de tu edge, no tu sizing. ${k>0?`Tu edge es positivo (Kelly ${fmt(k*100,1)}%), lo que valida arriesgar fijo por trade.`:`Kelly ≤ 0 o sin datos: aún no hay edge demostrado para subir tamaño.`}</div>
-    </div>
-
-    <div class="card">
-      <h3>Proyección de payout ${helpIcon("payoutproj")}</h3>
-      <div class="field-row-3">
-        <div class="field"><label>Cuenta</label><select id="pjAcct" onchange="calcPayout()">${planOptionsHTML('pjAcct')}</select></div>
-        <div class="field"><label>Profit medio/día ganador ($)</label><input type="number" id="pjDaily" value="300" oninput="calcPayout()"></div>
-        <div class="field"><label>Días ganadores/semana</label><input type="number" id="pjDays" value="3" oninput="calcPayout()"></div>
-      </div>
-      <div class="calc-out" id="pjOut"></div>
-    </div>
-  `;
-  // inicializar el balance con el tamaño de la cuenta seleccionada
-  const spec0=selectedSpec('szAcct');
-  if(spec0 && $('#szBal')) $('#szBal').value=spec0.size;
-  calcSize(); calcPayout();
-}
-
-// Al cambiar de cuenta, rellenar el balance con el tamaño de esa cuenta
-function szAcctChange(){
-  const spec=selectedSpec('szAcct');
-  if(spec && $('#szBal')) $('#szBal').value=spec.size;
-  calcSize();
-}
-
-function calcSize(){
-  const spec=selectedSpec('szAcct');
-  if(!spec){ $('#szOut').innerHTML='<p class="hint">Selecciona una cuenta.</p>'; return; }
-  const bal=+$('#szBal').value||0, pct=+$('#szPct').value||0,
-        points=+$('#szPoints').value||0, ptVal=+$('#szPtVal').value||0,
-        maxStops=+$('#szMaxStops').value||1;
-  const riskUSDinput=parseFloat($('#szRiskUSD').value);
-  const trailLock=spec.trailLock||0, lockedFloor=spec.lockedFloor||0, dd=spec.drawdown||0;
-  let floor;
-  if(trailLock && bal>=trailLock) floor=lockedFloor;
-  else floor=bal-dd;
-  const room = bal - floor;
-  // risc per trade: si l'usuari posa $ directe, s'usa; si no, % del marge
-  const usingDirect = !isNaN(riskUSDinput) && riskUSDinput>0;
-  const riskPerTrade = usingDirect ? riskUSDinput : room*(pct/100);
-  const riskPerContract = points*ptVal;   // punts × valor per punt
-  const contractsRaw = riskPerContract? Math.floor(riskPerTrade/riskPerContract):0;
-  const maxC = spec.maxMicro||9999;
-  const contracts = Math.max(0, Math.min(contractsRaw, maxC));
-  const cappedByPlan = contractsRaw>maxC;
-  const actualRisk = contracts*riskPerContract;
-  const ifMaxStops = actualRisk*maxStops;
-  const dll = spec.dailyLoss||0;
-  const safeRoom = ifMaxStops <= room;
-  const safeDLL = !dll || ifMaxStops <= dll;
-  // aviso si el balance no cuadra con el tamaño de la cuenta
-  const balIncoherent = bal>0 && (bal < spec.size-spec.drawdown-100 || bal > spec.size+spec.size*0.5);
-  $('#szOut').innerHTML=`
-    ${balIncoherent?`<div class="insight warn" style="margin-bottom:12px">⚠ El balance ${fmt$(bal)} no cuadra con una cuenta de ${fmt$(spec.size)}. Ponlo cerca de tu balance real (empieza en ${fmt$(spec.size)}) o vuelve a elegir la cuenta para autocompletarlo.</div>`:''}
-    <div class="grid g-4" style="gap:10px">
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">MARGEN AL DD</div><div class="big">${fmt$(room)}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO/TRADE</div><div class="big">${fmt$(riskPerTrade)}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">CONTRATOS (micros)</div><div class="big" style="color:var(--green)">${contracts}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">RIESGO REAL</div><div class="big">${fmt$(actualRisk)}</div></div>
-    </div>
-    <hr class="sep">
-    <div class="hint">Riesgo por contrato: ${points} puntos × ${fmt$(ptVal)}/punto = <b>${fmt$(riskPerContract)}</b> · ${usingDirect?`Usando riesgo directo de ${fmt$(riskPerTrade)}`:`Usando ${pct}% del margen`}</div>
-    <div class="hint" style="margin-top:6px">Suelo DD actual: <b>${fmt$(floor)}</b>${trailLock&&bal>=trailLock?' (bloqueado ✓)':' (aún trailing)'} · Tope del plan: ${maxC===9999?'—':maxC+' micros'}${spec.maxMini?' / '+spec.maxMini+' minis':''}</div>
-    ${cappedByPlan?`<div class="hint dd-warn" style="margin-top:6px">El cálculo pedía ${contractsRaw} contratos, pero el plan limita a ${maxC}. Recortado al máximo.</div>`:''}
-    <div class="hint ${safeRoom?'':'dd-warn'}" style="margin-top:6px">Con ${maxStops} stops seguidos perderías <b>${fmt$(ifMaxStops)}</b> ${safeRoom?`— dentro de tu margen de ${fmt$(room)}. ✓`:`— ¡te acerca al drawdown! Reduce riesgo o stop.`}</div>
-    ${dll?`<div class="hint ${safeDLL?'':'dd-warn'}" style="margin-top:6px">Daily loss limit ${fmt$(dll)}: ${safeDLL?`${maxStops} stops (${fmt$(ifMaxStops)}) caben dentro. ✓`:`⚠ ${maxStops} stops (${fmt$(ifMaxStops)}) superan el DLL. Baja el riesgo.`}</div>`:''}
-  `;
-}
-
-function calcPayout(){
-  const spec=selectedSpec('pjAcct');
-  if(!spec){ $('#pjOut').innerHTML='<p class="hint">Selecciona una cuenta.</p>'; return; }
-  const daily=+$('#pjDaily').value||0, daysWk=+$('#pjDays').value||0;
-  const minDP=spec.minDailyProfit||0;
-  const daysReq=spec.minDays||5;
-  const meetsMin = minDP? daily>=minDP : daily>0;
-  const weeksToPayout = meetsMin && daysWk>0 ? Math.ceil(daysReq/daysWk) : Infinity;
-  const cycleProfit = daily*daysWk*(weeksToPayout===Infinity?0:weeksToPayout);
-  const cap = spec.payoutCap||Infinity;
-  const grossPayout = Math.min(cycleProfit, cap);
-  $('#pjOut').innerHTML=`
-    <div class="grid g-3" style="gap:10px">
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">SEMANAS AL 1er PAYOUT</div><div class="big">${weeksToPayout===Infinity?'—':weeksToPayout}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">PROFIT ACUMULADO</div><div class="big">${fmt$(cycleProfit)}</div></div>
-      <div><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT (máx${cap!==Infinity?' cap':''})</div><div class="big" style="color:var(--green)">${fmt$(grossPayout)}</div></div>
-    </div>
-    <hr class="sep">
-    <div class="hint ${meetsMin?'':'dd-warn'}">${meetsMin
-      ? `Necesitas ${daysReq} días con profit${minDP?` ≥ ${fmt$(minDP)}`:''} y neto positivo para pedir payout.${cap!==Infinity?` Tope de retirada: ${fmt$(cap)}.`:''}`
-      : `⚠ ${fmt$(daily)}/día no llega al mínimo de ${fmt$(minDP)} que exige el plan para contar como día de payout.`}</div>
-  `;
+    </div>`;
 }
 /* ============================================================
    ACCOUNTS & PAYOUTS
    ============================================================ */
-function renderAccounts(v, T){
+function renderROI(v, T){
   const accts = DB.accounts;
+  const costs = DB.propCosts||[];
+  const payouts = DB.payouts||[];
+  // ROI global
+  const totalSpent = costs.reduce((s,c)=>s+(c.amount||0),0);
+  const totalCollected = payouts.reduce((s,p)=>s+(p.amount||0),0);
+  const netProfit = totalCollected - totalSpent;
+  const roiPct = totalSpent>0? (netProfit/totalSpent*100) : null;
+  // Embudo por estado de cuenta
+  const byStatus=s=>accts.filter(a=>(a.status||'en_curso')===s).length;
+  const nEval = accts.length; // total cuentas registradas
+  const nPassed = accts.filter(a=>['pasada','fondeada','payout'].includes(a.status)).length;
+  const nFunded = accts.filter(a=>['fondeada','payout'].includes(a.status)).length;
+  const nPayout = byStatus('payout');
+  const nLost = byStatus('perdida');
+  const nInProgress = byStatus('en_curso');
+  const passRate = nEval>0? nPassed/nEval*100 : 0;
+  const payoutConv = nFunded>0? nPayout/nFunded*100 : 0;
+  const avgPayout = payouts.length? totalCollected/payouts.length : 0;
+
   v.innerHTML=`
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-      <span>Cuentas & Payouts</span>
+      <span>ROI de props</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost sm" onclick="openCostModal()">+ Coste</button>
+        <button class="btn ghost sm" onclick="openPayoutModal()">+ Payout</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h3>ROI global ${helpIcon("roiglobal")}</h3>
+      <div class="grid g-4" style="gap:10px">
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">GASTADO</div><div class="big neg">${fmt$(totalSpent)}</div><div class="hint" style="margin-top:4px">${costs.length} costes</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">COBRADO</div><div class="big pos">${fmt$(totalCollected)}</div><div class="hint" style="margin-top:4px">${payouts.length} payouts</div></div>
+        <div class="calc-out" style="border-color:${netProfit>=0?'var(--green-dim)':'var(--red-dim)'}"><div class="label" style="font-size:10px;color:var(--ink-faint)">NETO</div><div class="big ${cls(netProfit)}">${fmt$(netProfit)}</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">ROI</div><div class="big ${roiPct==null?'':cls(roiPct)}">${roiPct==null?'—':fmt(roiPct,0)+'%'}</div></div>
+      </div>
+      ${roiPct!=null?`<div class="insight ${netProfit>=0?'':'warn'}" style="margin-top:14px">${netProfit>=0
+        ? `Tu negocio de props es rentable: por cada $ invertido en cuentas, recuperas ${fmt(1+roiPct/100,2)}$. `
+        : `De momento vas en negativo: has gastado ${fmt$(totalSpent)} y cobrado ${fmt$(totalCollected)}. Normal al principio si estás construyendo historial. `}</div>`:`<div class="hint" style="margin-top:12px">Añade tus costes de cuentas y tus payouts para ver el ROI.</div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h3>Embudo de cuentas ${helpIcon("funnel")}</h3>
+      <div class="grid g-4" style="gap:10px">
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CUENTAS</div><div class="big">${nEval}</div><div class="hint" style="margin-top:4px">${nInProgress} en curso</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PASADAS</div><div class="big">${nPassed}</div><div class="hint" style="margin-top:4px">${fmt(passRate,0)}% aprobación</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CON PAYOUT</div><div class="big pos">${nPayout}</div><div class="hint" style="margin-top:4px">${fmt(payoutConv,0)}% de las fondeadas</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PERDIDAS</div><div class="big ${nLost?'neg':''}">${nLost}</div></div>
+      </div>
+      <div class="grid g-2" style="gap:10px;margin-top:10px">
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT MEDIO</div><div class="big">${fmt$(avgPayout)}</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT TOTAL</div><div class="big pos">${fmt$(totalCollected)}</div></div>
+      </div>
+      <div class="hint" style="margin-top:12px">El embudo se calcula con el estado de cada cuenta (abajo). Marca el estado de cada una para que salgan bien las tasas de aprobación y conversión.</div>
+    </div>
+
+    ${costs.length||payouts.length?`
+    <div class="card" style="margin-bottom:14px">
+      <h3>Movimientos</h3>
+      <div class="table-wrap" style="border:none"><table>
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Importe</th><th></th></tr></thead>
+        <tbody>
+        ${[...costs.map(c=>({...c,kind:'coste'})),...payouts.map(p=>({...p,kind:'payout'}))]
+          .sort((a,b)=> a.date<b.date?1:-1)
+          .map(m=>`<tr>
+            <td>${m.date}</td>
+            <td><span class="tag ${m.kind==='payout'?'ok':'bad'}">${m.kind==='payout'?'Payout':'Coste'}</span></td>
+            <td style="font-family:var(--sans)">${m.concept||m.firm||'—'}</td>
+            <td class="${m.kind==='payout'?'pos':'neg'}">${m.kind==='payout'?'+':'−'}${fmt$(m.amount)}</td>
+            <td style="text-align:right"><button class="btn ghost sm icon" onclick="${m.kind==='payout'?`editPayout('${m.id}')`:`editCost('${m.id}')`}" title="Editar">✎</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`:''}
+
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;margin-top:20px">
+      <span>Cuentas</span>
       <div style="display:flex;gap:8px">
         <button class="btn ghost sm" onclick="openFirmEditor()">⚙ Editar reglas</button>
         <button class="btn primary sm" onclick="openAccountModal()">+ Cuenta</button>
@@ -1188,11 +1149,14 @@ function renderAccounts(v, T){
 
       const firmObj=DB.firms[a.firm]||{};
       const trailLabel = (firmObj.trailing||'eod')==='eod'?'EOD trailing':(firmObj.trailing==='intraday'?'trailing intradía':'estático');
+      const STATUS_LABELS={en_curso:'En curso',pasada:'Pasada',fondeada:'Fondeada',payout:'Con payout',perdida:'Perdida'};
+      const st=a.status||'en_curso';
+      const stCls={en_curso:'',pasada:'warn',fondeada:'ok',payout:'ok',perdida:'bad'}[st]||'';
 
       return `<div class="card" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
           <div>
-            <div style="font-size:15px;font-weight:700">${a.name}</div>
+            <div style="font-size:15px;font-weight:700">${a.name} <span class="phase-tag ${st==='fondeada'||st==='payout'?'funded':st==='perdida'?'mixed':'eval'}" style="position:static;margin-left:6px">${STATUS_LABELS[st]}</span></div>
             <div class="acct-meta">${a.firm} ${a.plan} · ${a.phase} · ${trailLabel} · ${aTrades.length} trades</div>
           </div>
           <div style="display:flex;gap:6px">
@@ -2066,6 +2030,11 @@ function accountModal(a){
         ${['Evaluación','Funded'].map(p=>`<option ${e.phase===p?'selected':''}>${p}</option>`).join('')}
       </select></div>
     </div>
+    <div class="field"><label>Estado <span class="hint">para el embudo de ROI</span></label>
+      <select id="a_status">
+        ${[['en_curso','En curso'],['pasada','Pasada'],['fondeada','Fondeada'],['payout','Con payout'],['perdida','Perdida']].map(([v,l])=>`<option value="${v}" ${(e.status||'en_curso')===v?'selected':''}>${l}</option>`).join('')}
+      </select>
+    </div>
     <div class="calc-out" id="a_preview" style="margin-bottom:14px"></div>
     <div class="hint">¿Falta tu firma o un plan? Ve a <b>Cuentas → Editar reglas</b> para añadirlo. El balance se calcula con tus trades asignados.</div>
     <div class="modal-actions">
@@ -2105,6 +2074,7 @@ function saveAccount(id){
     id:id||uid(),
     name:$('#a_name').value.trim()||`${firm} ${plan}`,
     firm, plan, phase,
+    status:$('#a_status').value,
     size:s.size,
     startBalance:s.size
   };
@@ -2115,6 +2085,80 @@ function saveAccount(id){
 function deleteAccount(id){
   if(!confirm('¿Eliminar esta cuenta?'))return;
   DB.accounts=DB.accounts.filter(a=>a.id!==id); save(); closeModal(); render(); toast('Cuenta eliminada');
+}
+
+// ---- Costes y payouts ----
+function openCostModal(){ costModal(); }
+function editCost(id){ costModal((DB.propCosts||[]).find(c=>c.id===id)); }
+function costModal(c){
+  const e=c||{};
+  const firms=Object.keys(DB.firms||{});
+  $('#modalBg').innerHTML=`<div class="modal">
+    <h2>${c?'Editar coste':'Nuevo coste'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field-row">
+      <div class="field"><label>Fecha</label><input type="date" id="c_date" value="${e.date||todayISO()}"></div>
+      <div class="field"><label>Importe ($)</label><input type="number" id="c_amount" step="0.01" value="${e.amount??''}" placeholder="ex. 165"></div>
+    </div>
+    <div class="field"><label>Concepto</label><input id="c_concept" value="${e.concept||''}" placeholder="ex. Eval 50K LucidFlex, reset, activación..."></div>
+    <div class="field"><label>Firma <span class="hint">(opcional)</span></label>
+      <select id="c_firm"><option value="">—</option>${firms.map(f=>`<option ${e.firm===f?'selected':''}>${f}</option>`).join('')}</select>
+    </div>
+    <div class="modal-actions">
+      ${c?`<button class="btn danger" onclick="deleteCost('${c.id}')">Eliminar</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="saveCost('${c?c.id:''}')">Guardar</button>
+    </div>
+  </div>`;
+  $('#modalBg').classList.add('show');
+}
+function saveCost(id){
+  const amount=parseFloat($('#c_amount').value);
+  if(isNaN(amount)||amount<=0){ toast('Pon un importe válido'); return; }
+  const c={ id:id||uid(), date:$('#c_date').value||todayISO(), amount, concept:$('#c_concept').value.trim(), firm:$('#c_firm').value };
+  DB.propCosts=DB.propCosts||[];
+  if(id){const i=DB.propCosts.findIndex(x=>x.id===id);DB.propCosts[i]=c;}
+  else DB.propCosts.push(c);
+  save(); closeModal(); render(); toast(id?'Coste actualizado':'Coste añadido');
+}
+function deleteCost(id){
+  if(!confirm('¿Eliminar este coste?'))return;
+  DB.propCosts=(DB.propCosts||[]).filter(c=>c.id!==id); save(); closeModal(); render(); toast('Coste eliminado');
+}
+function openPayoutModal(){ payoutModal(); }
+function editPayout(id){ payoutModal((DB.payouts||[]).find(p=>p.id===id)); }
+function payoutModal(p){
+  const e=p||{};
+  const firms=Object.keys(DB.firms||{});
+  $('#modalBg').innerHTML=`<div class="modal">
+    <h2>${p?'Editar payout':'Nuevo payout'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field-row">
+      <div class="field"><label>Fecha</label><input type="date" id="p_date" value="${e.date||todayISO()}"></div>
+      <div class="field"><label>Importe ($)</label><input type="number" id="p_amount" step="0.01" value="${e.amount??''}" placeholder="ex. 1500"></div>
+    </div>
+    <div class="field"><label>Concepto <span class="hint">(opcional)</span></label><input id="p_concept" value="${e.concept||''}" placeholder="ex. 1er payout Lucid Funded"></div>
+    <div class="field"><label>Firma <span class="hint">(opcional)</span></label>
+      <select id="p_firm"><option value="">—</option>${firms.map(f=>`<option ${e.firm===f?'selected':''}>${f}</option>`).join('')}</select>
+    </div>
+    <div class="modal-actions">
+      ${p?`<button class="btn danger" onclick="deletePayout('${p.id}')">Eliminar</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn primary" onclick="savePayout('${p?p.id:''}')">Guardar</button>
+    </div>
+  </div>`;
+  $('#modalBg').classList.add('show');
+}
+function savePayout(id){
+  const amount=parseFloat($('#p_amount').value);
+  if(isNaN(amount)||amount<=0){ toast('Pon un importe válido'); return; }
+  const p={ id:id||uid(), date:$('#p_date').value||todayISO(), amount, concept:$('#p_concept').value.trim(), firm:$('#p_firm').value };
+  DB.payouts=DB.payouts||[];
+  if(id){const i=DB.payouts.findIndex(x=>x.id===id);DB.payouts[i]=p;}
+  else DB.payouts.push(p);
+  save(); closeModal(); render(); toast(id?'Payout actualizado':'Payout añadido');
+}
+function deletePayout(id){
+  if(!confirm('¿Eliminar este payout?'))return;
+  DB.payouts=(DB.payouts||[]).filter(p=>p.id!==id); save(); closeModal(); render(); toast('Payout eliminado');
 }
 
 function closeModal(){ $('#modalBg').classList.remove('show'); $('#modalBg').innerHTML=''; }
@@ -2360,6 +2404,22 @@ function buildAIReport(){
       const tipo=n.type==='unfilled'?'Entrada no ejecutada':'Día sin operar';
       L.push(`${n.date} | ${tipo}${n.reason?' ('+(NOTRADE_REASONS[n.reason]||n.reason)+')':''}${n.note?' — '+n.note:''}`);
     });
+    L.push('');
+  }
+  // ROI de props
+  const costs=DB.propCosts||[], payouts=DB.payouts||[];
+  if(costs.length||payouts.length||(DB.accounts||[]).length){
+    const spent=costs.reduce((s,c)=>s+(c.amount||0),0);
+    const collected=payouts.reduce((s,p)=>s+(p.amount||0),0);
+    const accts=DB.accounts||[];
+    const nPassed=accts.filter(a=>['pasada','fondeada','payout'].includes(a.status)).length;
+    const nFunded=accts.filter(a=>['fondeada','payout'].includes(a.status)).length;
+    const nPayout=accts.filter(a=>a.status==='payout').length;
+    L.push('--- ROI DE PROPS ---');
+    L.push(`Gastado en cuentas: ${fmt$(spent)} (${costs.length} costes) | Cobrado en payouts: ${fmt$(collected)} (${payouts.length} payouts)`);
+    L.push(`Neto: ${fmt$(collected-spent)}${spent>0?' | ROI: '+fmt((collected-spent)/spent*100,0)+'%':''}`);
+    L.push(`Embudo: ${accts.length} cuentas | ${nPassed} pasadas${accts.length?' ('+pct(nPassed/accts.length*100)+')':''} | ${nFunded} fondeadas | ${nPayout} con payout`);
+    if(payouts.length) L.push(`Payout medio: ${fmt$(collected/payouts.length)}`);
     L.push('');
   }
   return L.join('\n');
