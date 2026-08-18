@@ -1214,48 +1214,60 @@ function renderROI(v, T){
       const trailLabel = (firmObj.trailing||'eod')==='eod'?'EOD trailing':(firmObj.trailing==='intraday'?'trailing intradía':'estático');
       const STATUS_LABELS={en_curso:'En curso',pasada:'Pasada',fondeada:'Fondeada',payout:'Con payout',perdida:'Perdida'};
       const st=a.status||'en_curso';
-      const stCls={en_curso:'',pasada:'warn',fondeada:'ok',payout:'ok',perdida:'bad'}[st]||'';
+      const isEval = a.phase==='Evaluación';
+      const dead = st==='perdida';
 
-      return `<div class="card" style="margin-bottom:12px">
+      // consejo según situación
+      let advice='';
+      if(dead){
+        advice='Cuenta quemada. Si quieres, elimínala o déjala como registro histórico.';
+      } else if(isEval && target){
+        if(targetPct>=100) advice='¡Objetivo alcanzado! Ya puedes pasarla a fondeada.';
+        else if(ddPct<25) advice='Cuidado: estás cerca del drawdown. Baja el riesgo hasta alejarte del suelo.';
+        else if(targetPct>=60) advice='Vas bien encaminado al target. No fuerces: mantén tu riesgo y deja que llegue.';
+        else advice='Aún lejos del target. Prioriza no quemarla: sobrevivir es más importante que correr.';
+      } else {
+        // funded
+        if(ddPct<25) advice='Estás cerca del suelo. Protege la cuenta: reduce tamaño hasta recuperar margen.';
+        else if(ddPct>60) advice='Buen colchón sobre el drawdown. Opera tranquilo y ve pensando en tu próximo payout.';
+        else advice='Margen razonable. Mantén disciplina y construye hacia el payout sin arriesgar el suelo.';
+      }
+
+      return `<div class="card" style="margin-bottom:12px;${dead?'opacity:.6':''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
           <div>
             <div style="font-size:15px;font-weight:700">${a.name} <span class="phase-tag ${st==='fondeada'||st==='payout'?'funded':st==='perdida'?'mixed':'eval'}" style="position:static;margin-left:6px">${STATUS_LABELS[st]}</span></div>
-            <div class="acct-meta">${a.firm} ${a.plan} · ${a.phase} · ${trailLabel} · ${aTrades.length} trades</div>
+            <div class="acct-meta">${a.firm} ${a.plan} · ${trailLabel} · ${aTrades.length} trades${a.phase==='Funded'?' funded':''}</div>
           </div>
           <div style="display:flex;gap:6px">
-            <span class="tag ${ddPct>40?'ok':ddPct>20?'warn':'bad'}">DD ${fmt(ddPct,0)}%</span>
             ${(st==='fondeada'||st==='payout')?`<button class="btn ghost sm icon" onclick="adjustBalance('${a.id}')" title="Reajustar balance (tras payout)">💰</button>`:''}
             <button class="btn ghost sm icon" onclick="editAccount('${a.id}')" title="Editar">✎</button>
           </div>
         </div>
-        <div class="grid g-3" style="gap:10px;margin-bottom:14px">
-          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">BALANCE</div><div style="font-family:var(--mono);font-size:18px;font-weight:700">${fmt$(balance)}</div></div>
-          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">P&L</div><div style="font-family:var(--mono);font-size:18px;font-weight:700" class="${cls(realized)}">${fmt$(realized)}</div></div>
-          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">SUELO DD ${locked?'🔒':''}</div><div style="font-family:var(--mono);font-size:18px;font-weight:700">${fmt$(floor)}</div></div>
+
+        <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
+          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">BALANCE</div><div style="font-family:var(--mono);font-size:22px;font-weight:700">${fmt$(balance)}</div></div>
+          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">P&L ${a.phase==='Funded'?'funded':''}</div><div style="font-family:var(--mono);font-size:16px;font-weight:700" class="${cls(realized)}">${fmt$(realized)}</div></div>
         </div>
+
+        ${isEval&&target?`
         <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Margen hasta drawdown (breach)</span><span style="font-family:var(--mono)">${fmt$(ddRoom)}</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${ddPct}%;background:${ddPct>40?'var(--green)':ddPct>20?'var(--amber)':'var(--red)'}"></div></div>
-        </div>
-        ${dll?`<div class="insight ${worstDay>-dll?'':'bad'}" style="margin:0 0 12px">Daily loss limit: <b>${fmt$(dll)}</b>. Tu peor día: ${fmt$(worstDay)}. ${worstDay>-dll?'Dentro del límite ✓':'⚠ ¡Superaste el DLL!'}</div>`:''}
-        ${a.phase==='Evaluación'&&target?`
-        <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Progreso al profit target</span><span style="font-family:var(--mono)">${fmt(targetPct,0)}% · faltan ${fmt$(Math.max(0,targetRoom))}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:3px"><span>📈 Progreso al objetivo</span><span style="font-family:var(--mono)">${fmt(targetPct,0)}% · faltan ${fmt$(Math.max(0,targetRoom))}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${targetPct}%;background:var(--blue)"></div></div>
         </div>`:''}
-        ${consLimit?`<div class="insight ${consistencyOK?'':'warn'}" style="margin-top:10px">Consistency: tu mayor día es <b>${fmt(consistency,0)}%</b> del profit (límite ${consLimit}%). ${consistencyOK?'Dentro ✓':'⚠ Reparte más el profit entre días.'}</div>`:''}
-        ${a.phase==='Funded'?`
-        <div style="margin-bottom:6px;margin-top:10px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:2px"><span>Días con profit para payout${minDP?` (≥${fmt$(minDP)})`:''}</span><span style="font-family:var(--mono)">${qualDays} / ${daysReq}</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,qualDays/daysReq*100)}%;background:${payoutReady?'var(--green)':'var(--violet)'}"></div></div>
+
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:3px"><span>🛡️ Margen hasta quemarla ${locked?'🔒':''}</span><span style="font-family:var(--mono)">${fmt$(ddRoom)} (suelo ${fmt$(floor)})</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${ddPct}%;background:${ddPct>40?'var(--green)':ddPct>20?'var(--amber)':'var(--red)'}"></div></div>
         </div>
-        <div class="insight" style="margin-top:10px">${payoutReady
-          ? `✓ <b>Payout disponible.</b> ${qualDays} días con profit y neto positivo.${spec.payoutCap?` Tope de retirada ${fmt$(spec.payoutCap)}.`:''}`
-          : `Te faltan <b>${Math.max(0,daysReq-qualDays)} días</b> con profit${minDP?` ≥ ${fmt$(minDP)}`:''} para pedir payout.`}</div>
-        `:''}
+
+        ${consLimit?`<div class="insight ${consistencyOK?'':'warn'}" style="margin:0 0 10px">Consistency: tu mayor día es <b>${fmt(consistency,0)}%</b> del profit (límite ${consLimit}%). ${consistencyOK?'Dentro ✓':'⚠ Reparte más el profit entre días.'}</div>`:''}
+        ${dll&&worstDay<=-dll?`<div class="insight bad" style="margin:0 0 10px">⚠ Tu peor día (${fmt$(worstDay)}) superó el daily loss limit de ${fmt$(dll)}.</div>`:''}
+
+        <div class="insight ${dead?'bad':ddPct<25?'warn':''}" style="margin-top:4px">💡 ${advice}</div>
       </div>`;
     }).join('')}
-    ${accts.length?`<div class="insight" style="margin-top:6px">Todas tus firmas usan <b>trailing EOD</b>: el suelo sube con tu balance de cierre y, si el plan tiene trail lock, se bloquea al superarlo (🔒). Las que tienen daily loss limit se marcan aparte. Revisa las reglas exactas de cada firma con ⚙ Editar reglas.</div>`:''}
+    ${accts.length?`<div class="insight" style="margin-top:6px">Todas tus firmas usan <b>trailing EOD</b>: el suelo sube con tu balance de cierre y, si el plan tiene trail lock, se bloquea al superarlo (🔒). Revisa las reglas exactas de cada firma con ⚙ Editar reglas.</div>`:''}
   `;
 }
 
@@ -1786,10 +1798,19 @@ function tradeModal(t){
         </div>
       </div>
     </div>
-    <div class="field"><label>Cuenta</label><select id="f_account"><option value="">— sin asignar —</option>${DB.accounts.map(a=>{
-      const tag = a.phase==='Funded'?' (fondeada)':' (eval)';
-      return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}</option>`;
-    }).join('')}</select></div>
+    <div class="field-row">
+      <div class="field"><label>Cuenta</label><select id="f_account" onchange="onAccountChange()"><option value="">— sin asignar —</option>${DB.accounts.map(a=>{
+        const tag = a.phase==='Funded'?' (fondeada)':' (eval)';
+        return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}</option>`;
+      }).join('')}</select></div>
+      <div class="field"><label>Fase del trade <span class="hint">en qué fase se hizo</span></label>
+        <select id="f_phase">
+          <option value="" ${!e.phase?'selected':''}>— auto (según cuenta) —</option>
+          <option value="eval" ${e.phase==='eval'?'selected':''}>Evaluación</option>
+          <option value="funded" ${e.phase==='funded'?'selected':''}>Funded</option>
+        </select>
+      </div>
+    </div>
     <div class="field-row-3">
       <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
       <div class="field"><label>R realizado <span class="hint">lo que sacaste</span></label><input type="number" id="f_realizedR" step="0.1" value="${e.realizedR??''}" oninput="onRealizedRChange()" placeholder="-1 / 0 / 1.5"></div>
@@ -1912,6 +1933,12 @@ function toggleSmt(){
   const box=$('#f_smtDetails');
   if(!sel||!box) return;
   box.style.display = sel.value==='yes' ? '' : 'none';
+}
+// Al cambiar de cuenta, autoseleccionar su fase actual (si el usuario no ha forzado una)
+function onAccountChange(){
+  const acc=DB.accounts.find(a=>a.name===$('#f_account')?.value);
+  const ph=$('#f_phase');
+  if(acc && ph && !ph.value){ ph.value = acc.phase==='Funded'?'funded':'eval'; }
 }
 function onRealizedRChange(){
   const r=parseFloat($('#f_realizedR')?.value);
@@ -2037,7 +2064,7 @@ function saveTrade(id){
     smtResult:$('#f_smt').value==='yes'?$('#f_smtResult').value:'',
     smtTiming:$('#f_smt').value==='yes'?$('#f_smtTiming').value:'',
     account:$('#f_account').value,
-    phase:existing?.phase || (()=>{ const acc=DB.accounts.find(a=>a.name===$('#f_account').value); return acc? (acc.phase==='Funded'?'funded':'eval') : ''; })(),
+    phase: $('#f_phase').value || (()=>{ const acc=DB.accounts.find(a=>a.name===$('#f_account').value); return acc? (acc.phase==='Funded'?'funded':'eval') : ''; })(),
     plannedR:parseFloat($('#f_plannedR').value)||0,
     realizedR:isNaN(realizedR)?0:realizedR,
     riskUSD:parseFloat($('#f_riskUSD').value)||0,
