@@ -188,7 +188,7 @@ const HELP_TEXTS={
   // Sizing
   kelly:['Kelly','Termómetro de tu edge, no tu sizing. Valida si tienes ventaja real. Necesita 30+ trades para ser fiable.'],
   roiglobal:['ROI global','Tu negocio de props: total gastado en cuentas vs total cobrado en payouts. El ROI % te dice cuánto recuperas por cada $ invertido.'],
-  funnel:['Embudo de cuentas','El recorrido de tus cuentas: cuántas pasaste (% aprobación), de las fondeadas cuántas dieron payout (% conversión), y el payout medio. Se calcula con el estado de cada cuenta.']
+  funnel:['Estadística de cuentas','El recorrido de tus cuentas: cuántas pasaste (% aprobación), de las fondeadas cuántas dieron payout (% conversión), y el payout medio. Se calcula con el estado de cada cuenta.']
 };
 let _helpOpen=null;
 function helpIcon(key){ return `<span class="help" onclick="showHelp(event,'${key}')">?</span>`; }
@@ -1167,7 +1167,7 @@ function renderROI(v, T){
     </div>
 
     <div class="card" style="margin-bottom:14px">
-      <h3>Embudo de cuentas ${helpIcon("funnel")}</h3>
+      <h3>Estadística de cuentas ${helpIcon("funnel")}</h3>
       <div class="grid g-4" style="gap:10px">
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CUENTAS</div><div class="big">${nEval}</div><div class="hint" style="margin-top:4px">${nInProgress} en curso</div></div>
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PASADAS</div><div class="big">${nPassed}</div><div class="hint" style="margin-top:4px">${fmt(passRate,0)}% aprobación</div></div>
@@ -1178,7 +1178,7 @@ function renderROI(v, T){
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT MEDIO</div><div class="big">${fmt$(avgPayout)}</div></div>
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PAYOUT TOTAL</div><div class="big pos">${fmt$(totalCollected)}</div></div>
       </div>
-      <div class="hint" style="margin-top:12px">El embudo se calcula con el estado de cada cuenta (abajo). Marca el estado de cada una para que salgan bien las tasas de aprobación y conversión.</div>
+      <div class="hint" style="margin-top:12px">La estadística se calcula con el estado de cada cuenta (abajo). Marca el estado de cada una para que salgan bien las tasas de aprobación y conversión.</div>
     </div>
 
     ${costs.length||payouts.length?`
@@ -1221,11 +1221,16 @@ function renderROI(v, T){
       const dd = spec.drawdown||0;
       const trailLock = spec.trailLock||0;
       const lockedFloor = spec.lockedFloor||0;
-      // Trailing EOD genérico: suelo sube con balance hasta trailLock, luego bloqueado en lockedFloor
+      // Suelo trailing EOD: sube con el PICO de balance alcanzado, nunca baja con las pérdidas.
+      // Reconstruimos el pico acumulando los trades en orden cronológico.
+      const startBal0 = a.startBalance||0;
+      let running0 = startBal0, peak0 = startBal0;
+      aTrades.slice().sort((x,y)=> x.date<y.date?-1:1).forEach(t=>{ running0+=(t.pnl||0); if(running0>peak0) peak0=running0; });
       let floor;
-      if(trailLock && balance>=trailLock) floor = lockedFloor;
-      else floor = balance - dd;
-      const locked = trailLock && balance>=trailLock;
+      if(trailLock && peak0>=trailLock) floor = lockedFloor;
+      else floor = peak0 - dd;
+      const locked = trailLock && peak0>=trailLock;
+      // margen real que te queda: desde el balance ACTUAL hasta el suelo
       const ddRoom = balance - floor;
       const ddPct = dd? Math.max(0,Math.min(100, ddRoom/dd*100)) : 0;
 
@@ -2167,7 +2172,7 @@ function accountModal(a){
         ${['Evaluación','Funded'].map(p=>`<option ${e.phase===p?'selected':''}>${p}</option>`).join('')}
       </select></div>
     </div>
-    <div class="field"><label>Estado <span class="hint">para el embudo de ROI</span></label>
+    <div class="field"><label>Estado <span class="hint">para la estadística de cuentas</span></label>
       <select id="a_status">
         ${[['en_curso','En curso'],['pasada','Pasada'],['fondeada','Fondeada'],['payout','Con payout'],['perdida','Perdida']].map(([v,l])=>`<option value="${v}" ${(e.status||'en_curso')===v?'selected':''}>${l}</option>`).join('')}
       </select>
@@ -2572,7 +2577,7 @@ function buildAIReport(){
     L.push('--- ROI DE PROPS ---');
     L.push(`Gastado en cuentas: ${fmt$(spent)} (${costs.length} costes) | Cobrado en payouts: ${fmt$(collected)} (${payouts.length} payouts)`);
     L.push(`Neto: ${fmt$(collected-spent)}${spent>0?' | ROI: '+fmt((collected-spent)/spent*100,0)+'%':''}`);
-    L.push(`Embudo: ${accts.length} cuentas | ${nPassed} pasadas${accts.length?' ('+pct(nPassed/accts.length*100)+')':''} | ${nFunded} fondeadas | ${nPayout} con payout`);
+    L.push(`Estadística de cuentas: ${accts.length} cuentas | ${nPassed} pasadas${accts.length?' ('+pct(nPassed/accts.length*100)+')':''} | ${nFunded} fondeadas | ${nPayout} con payout`);
     if(payouts.length) L.push(`Payout medio: ${fmt$(collected/payouts.length)}`);
     L.push('');
   }
