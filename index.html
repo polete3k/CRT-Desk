@@ -162,18 +162,18 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:18px 0}
 .cal-head .month{font-size:16px;font-weight:700;text-transform:capitalize}
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .cal-dow{text-align:center;font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;font-weight:600;padding:4px 0}
-.cal-cell{min-height:74px;border:1px solid var(--line);border-radius:10px;padding:7px;display:flex;flex-direction:column;background:var(--panel);position:relative}
+.cal-cell{min-height:108px;border:1px solid var(--line);border-radius:10px;padding:9px;display:flex;flex-direction:column;background:var(--panel);position:relative}
 .cal-cell.empty{background:transparent;border:none}
 .cal-cell.win{background:rgba(61,220,132,.10);border-color:var(--green-dim)}
 .cal-cell.loss{background:rgba(255,93,93,.10);border-color:var(--red-dim)}
 .cal-cell.today{box-shadow:0 0 0 2px var(--blue) inset}
-.cal-cell .daynum{font-size:11px;color:var(--ink-dim);font-weight:600}
-.cal-cell .pnl{font-family:var(--mono);font-size:12px;font-weight:700;margin-top:auto}
+.cal-cell .daynum{font-size:12px;color:var(--ink-dim);font-weight:600}
+.cal-cell .pnl{font-family:var(--mono);font-size:13px;font-weight:700;margin-top:auto}
 .cal-cell .meta{font-size:9px;color:var(--ink-faint);font-family:var(--mono)}
 .cal-cell.clickable{cursor:pointer;transition:.12s}
 .cal-cell.clickable:hover{border-color:#2c3849}
 .cal-cell .flag-dot{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--red)}
-@media(max-width:560px){.cal-cell{min-height:56px;padding:4px}.cal-cell .pnl{font-size:10px}.cal-cell .meta{display:none}}
+@media(max-width:560px){.cal-cell{min-height:72px;padding:5px}.cal-cell .pnl{font-size:10px}.cal-cell .meta{display:none}}
 .cal-month-stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:16px;font-size:12px}
 .cal-month-stats .s{display:flex;flex-direction:column}
 .cal-month-stats .s .k{color:var(--ink-faint);font-size:10px;text-transform:uppercase;letter-spacing:.04em}
