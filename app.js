@@ -1374,29 +1374,29 @@ function renderCalendar(v, T){
     if(d){
       const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
       const phases=[...d.phases];
-      const phaseTag = phases.length===1
-        ? `<span class="phase-tag ${phases[0]}">${phases[0]==='funded'?'F':'E'}</span>`
-        : phases.length>1 ? `<span class="phase-tag mixed">E/F</span>` : '';
+      const phaseLabel = phases.length>1 ? 'EVAL·FUND' : phases.length===1 ? (phases[0]==='funded'?'FUNDED':'EVAL') : '';
+      const phaseCls = phases.length>1 ? 'mixed' : phases.length===1 ? phases[0] : '';
+      const chips = `<div class="cal-chips">
+        ${phaseLabel?`<span class="cal-chip ${phaseCls}">${phaseLabel}</span>`:''}
+        ${d.dirty?'<span class="cal-chip err">REGLA SALTADA</span>':''}
+        ${unfilledCount?`<span class="cal-chip ne" title="entrada(s) no ejecutada(s)">NO EJEC${unfilledCount>1?' ×'+unfilledCount:''}</span>`:''}
+      </div>`;
       cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
         <div class="daynum">${day}</div>
-        ${phaseTag}
-        ${d.dirty?'<div class="flag-dot" title="día con error"></div>':''}
-        ${unfilledCount?`<div class="nt-badge" title="${unfilledCount} entrada(s) no ejecutada(s)">⊘${unfilledCount>1?unfilledCount:''}</div>`:''}
+        ${chips}
         <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
         <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
       </div>`;
     } else if(noday){
       cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${noday.id}')" title="${NOTRADE_REASONS[noday.reason]||''}">
         <div class="daynum">${day}</div>
-        <div class="nt-mark">🚫</div>
+        <div class="cal-chips"><span class="cal-chip rest">SIN OPERAR</span>${unfilledCount?`<span class="cal-chip ne">NO EJEC${unfilledCount>1?' ×'+unfilledCount:''}</span>`:''}</div>
         <div class="meta nt-reason">${NOTRADE_REASONS[noday.reason]||''}</div>
-        ${unfilledCount?`<div class="nt-badge" title="${unfilledCount} entrada(s) no ejecutada(s)">⊘${unfilledCount>1?unfilledCount:''}</div>`:''}
       </div>`;
     } else if(unfilledCount){
       cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${ntList.find(n=>n.type==='unfilled').id}')" title="entrada no ejecutada">
         <div class="daynum">${day}</div>
-        <div class="nt-mark" style="opacity:.6">⊘</div>
-        <div class="meta nt-reason">no ejecutada${unfilledCount>1?' ×'+unfilledCount:''}</div>
+        <div class="cal-chips"><span class="cal-chip ne">NO EJECUTADA${unfilledCount>1?' ×'+unfilledCount:''}</span></div>
       </div>`;
     } else {
       cells+=`<div class="cal-cell ${isToday?'today':''}"><div class="daynum">${day}</div></div>`;
