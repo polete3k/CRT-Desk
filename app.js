@@ -3,7 +3,7 @@
    Motor de métricas + UI. Persistencia en localStorage.
    ============================================================ */
 
-const STORE_KEY = 'swingdesk_v1';
+const STORE_KEY = 'crtdesk_v1';
 
 /* ============================================================
    REGLAS MULTI-FIRMA
@@ -22,7 +22,51 @@ const STORE_KEY = 'swingdesk_v1';
    ============================================================ */
 
 // Preset verificado: LucidFlex (support.lucidtrading.com). Eval y funded comparten trailing.
-const FIRM_PRESETS = {};
+const FIRM_PRESETS = {
+  'LucidFlex': {
+    trailing:'eod',
+    plans:{
+      '25K': { size:25000, eval:{profitTarget:1250,drawdown:1000,trailLock:26100,lockedFloor:25100,dailyLoss:0,maxMicro:20,maxMini:2,minDays:1,consistency:50,minDailyProfit:100,payoutCap:1000},
+                          funded:{profitTarget:0,drawdown:1000,trailLock:26100,lockedFloor:25100,dailyLoss:0,maxMicro:20,maxMini:2,minDays:5,consistency:0,minDailyProfit:100,payoutCap:1000} },
+      '50K': { size:50000, eval:{profitTarget:3000,drawdown:2000,trailLock:52100,lockedFloor:50100,dailyLoss:0,maxMicro:40,maxMini:4,minDays:1,consistency:50,minDailyProfit:150,payoutCap:2000},
+                          funded:{profitTarget:0,drawdown:2000,trailLock:52100,lockedFloor:50100,dailyLoss:0,maxMicro:40,maxMini:4,minDays:5,consistency:0,minDailyProfit:150,payoutCap:2000} },
+      '100K':{ size:100000,eval:{profitTarget:6000,drawdown:3000,trailLock:103100,lockedFloor:100100,dailyLoss:0,maxMicro:60,maxMini:6,minDays:1,consistency:50,minDailyProfit:200,payoutCap:2500},
+                          funded:{profitTarget:0,drawdown:3000,trailLock:103100,lockedFloor:100100,dailyLoss:0,maxMicro:60,maxMini:6,minDays:5,consistency:0,minDailyProfit:200,payoutCap:2500} },
+      '150K':{ size:150000,eval:{profitTarget:9000,drawdown:4500,trailLock:154600,lockedFloor:150100,dailyLoss:0,maxMicro:100,maxMini:10,minDays:1,consistency:50,minDailyProfit:250,payoutCap:3000},
+                          funded:{profitTarget:0,drawdown:4500,trailLock:154600,lockedFloor:150100,dailyLoss:0,maxMicro:100,maxMini:10,minDays:5,consistency:0,minDailyProfit:250,payoutCap:3000} }
+    }
+  },
+
+  // Topstep — 50K (trailing EOD por elección del usuario). Combine + Express Funded (opción Standard).
+  'Topstep': {
+    trailing:'eod',
+    plans:{
+      '50K': { size:50000,
+        eval:{profitTarget:3000,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:50,maxMini:5,minDays:1,consistency:50,minDailyProfit:0,payoutCap:0},
+        funded:{profitTarget:0,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:50,maxMini:5,minDays:5,consistency:0,minDailyProfit:150,payoutCap:4000} }
+    }
+  },
+
+  // MyFundedFutures — 50K Builder (Max Drawdown EOD + Daily Drawdown). Micro scaling 10:1.
+  'MyFundedFutures': {
+    trailing:'eod',
+    plans:{
+      '50K Builder': { size:50000,
+        eval:{profitTarget:3000,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:40,maxMini:4,minDays:1,consistency:0,minDailyProfit:0,payoutCap:0},
+        funded:{profitTarget:0,drawdown:2000,trailLock:0,lockedFloor:0,dailyLoss:1000,maxMicro:40,maxMini:4,minDays:2,consistency:50,minDailyProfit:0,payoutCap:2000} }
+    }
+  },
+
+  // FundedNext Futures — 50K. Max Loss EOD, sin daily loss.
+  'FundedNext': {
+    trailing:'eod',
+    plans:{
+      '50K': { size:50000,
+        eval:{profitTarget:2500,drawdown:1500,trailLock:0,lockedFloor:0,dailyLoss:0,maxMicro:30,maxMini:3,minDays:1,consistency:40,minDailyProfit:0,payoutCap:0},
+        funded:{profitTarget:0,drawdown:1500,trailLock:0,lockedFloor:0,dailyLoss:0,maxMicro:30,maxMini:3,minDays:5,consistency:0,minDailyProfit:0,payoutCap:1500} }
+    }
+  }
+};
 
 const DEFAULTS = {
   trades: [],
@@ -674,8 +718,79 @@ function renderPerformance(v, T){
       ${statCard('Avg loss', fmtR(avgLoss(T)),'',('neg'))}
       ${statCard('Profit factor', profitFactor(T)===Infinity?'∞':fmt(profitFactor(T),2),'',cls(profitFactor(T)-1))}
     </div>
+    <div class="grid g-2" style="margin-bottom:14px">
+      <div class="card"><h3>Por sesión</h3>${breakdownTable(breakdown(T,'session'))}</div>
+      <div class="card"><h3>Por símbolo</h3>${breakdownTable(breakdown(T,'symbol'))}</div>
+    </div>
     <div class="card" style="margin-bottom:14px">
-      <h3>Por símbolo</h3>${breakdownTable(breakdown(T,'symbol'))}
+      <h3>Por setup</h3>${breakdownTable(breakdown(T,'setup'))}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>¿Dónde empieza el movimiento? (estructura CRT) ${helpIcon("movetype")}</h3>
+      ${(()=>{
+        const withMove=T.filter(t=>t.moveType);
+        if(withMove.length<3) return `<p class="hint">Marca "¿Dónde empezó el movimiento?" en tus trades. Con 3+ te muestro si te va mejor con el impulso de apertura o con el PO3 de la vela de 4h.</p>`;
+        const groups={};
+        withMove.forEach(t=>{ (groups[t.moveType]=groups[t.moveType]||[]).push(t); });
+        const rows=Object.keys(groups).map(k=>{
+          const ts=groups[k];
+          return { key:k, label:MOVE_TYPES[k]||k, n:ts.length, exp:expectancy(ts), wr:winrate(ts), r:ts.reduce((s,t)=>s+(t.realizedR||0),0) };
+        }).sort((a,b)=>b.exp-a.exp);
+        const best=rows[0];
+        return `
+        <div class="table-wrap" style="border:none"><table>
+          <thead><tr><th>Origen</th><th>N</th><th>Exp</th><th>WR</th><th>R acum</th></tr></thead>
+          <tbody>${rows.map(r=>`<tr>
+            <td style="font-family:var(--sans);font-weight:600">${r.label}</td>
+            <td>${r.n}</td>
+            <td class="${cls(r.exp)}">${fmtR(r.exp)}</td>
+            <td>${fmt(r.wr,0)}%</td>
+            <td class="${cls(r.r)}">${fmtR(r.r)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        ${rows.length>=2?`<div class="insight" style="margin-top:12px">Tu mejor estructura es <b>${best.label}</b> (${fmtR(best.exp)} de expectancy sobre ${best.n} trades). Si la diferencia es grande y tienes datos suficientes, prioriza operar esa estructura y sé más selectivo con las otras.</div>`:`<div class="insight" style="margin-top:12px">Solo tienes datos de una estructura por ahora. Registra más para poder comparar.</div>`}
+        `;
+      })()}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>RS Scalp — entradas por SMT ${helpIcon("smt")}</h3>
+      ${(()=>{
+        const smt=T.filter(t=>t.smt==='yes' && t.smtResult);
+        if(smt.length<3) return `<p class="hint">Marca "¿Hubo entrada por SMT?" en tus trades. Con 3+ te muestro cómo funciona esta subestrategia: cuántas van a TP y si el timing respecto a la apertura influye.</p>`;
+        const tp=smt.filter(t=>t.smtResult==='tp').length;
+        const sl=smt.filter(t=>t.smtResult==='sl').length;
+        const be=smt.filter(t=>t.smtResult==='be').length;
+        const wr=smt.length?tp/smt.length*100:0;
+        // por timing
+        const TIMING={before:'Antes apertura (<9:30)',open:'En apertura (9:30-10)',after:'Después (>10:00)'};
+        const byTiming=Object.keys(TIMING).map(k=>{
+          const ts=smt.filter(t=>t.smtTiming===k);
+          const t_tp=ts.filter(t=>t.smtResult==='tp').length;
+          return { key:k, label:TIMING[k], n:ts.length, tp:t_tp, wr:ts.length?t_tp/ts.length*100:0 };
+        }).filter(r=>r.n>0).sort((a,b)=>b.wr-a.wr);
+        return `
+        <div class="grid g-4" style="gap:10px">
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TOTAL SMT</div><div class="big">${smt.length}</div></div>
+          <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">% A TP</div><div class="big ${wr>=50?'pos':'neg'}">${fmt(wr,0)}%</div><div class="hint" style="margin-top:4px">${tp}/${smt.length}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">A SL</div><div class="big neg">${sl}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">BE</div><div class="big">${be}</div></div>
+        </div>
+        ${byTiming.length?`
+        <div class="table-wrap" style="border:none;margin-top:14px"><table style="min-width:auto">
+          <thead><tr><th>Timing</th><th>N</th><th>A TP</th><th>% acierto</th></tr></thead>
+          <tbody>${byTiming.map(r=>`<tr>
+            <td style="font-family:var(--sans);font-weight:600">${r.label}</td>
+            <td>${r.n}</td>
+            <td>${r.tp}</td>
+            <td class="${r.wr>=50?'pos':'neg'}">${fmt(r.wr,0)}%</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div class="insight ${wr>=50?'':'warn'}" style="margin-top:12px">
+          Los SMT van a TP el <b>${fmt(wr,0)}%</b> de las veces (${smt.length} señales). ${byTiming.length>=2?`Tu mejor timing es <b>${byTiming[0].label}</b> (${fmt(byTiming[0].wr,0)}% acierto). ${byTiming[0].wr-byTiming[byTiming.length-1].wr>=25?'La diferencia entre timings es notable — prioriza el mejor.':'Los timings rinden parecido de momento.'}`:''}
+          ${smt.length<15?' ⚠ Aún pocos datos: no saques conclusiones firmes hasta 15-20 señales.':''}
+        </div>`:''}
+        `;
+      })()}
     </div>
     <div class="card" style="margin-bottom:14px">
       <h3>Tu R:R óptimo (según MFE) ${helpIcon("optimalrr")}</h3>
@@ -1542,11 +1657,12 @@ const FLAG_LABELS={
 const PLAN_CHECKLIST=[
   'Tener el DOL claro e ir solo a favor del DOL (Innegociable)',
   'SL donde se invalide el trade',
-  'Vela de 12h ha cerrado dentro',
+  'Tener rangos LTF (8h-2h) a favor',
   'No tener rango contrario importante cerca',
   'Tendencia a favor',
-  'Poner BE solo al llegar al 3r cuadrante (nunca antes)',
-  'Solo puedo cerrar antes si el par correlacionado llega al objetivo'
+  '1 SL por cuenta por día',
+  'Poner BE solo al llegar al primer objetivo o más (nunca antes)',
+  'Solo puedo cerrar antes si 2/3 pares han llegado ya al DOL o a un objetivo importante'
 ];
 const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
@@ -1691,11 +1807,43 @@ function tradeModal(t){
       <div class="plan-count" id="f_planCount"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Fecha inicio <span class="hint">apertura del trade</span></label><input type="date" id="f_dateStart" value="${e.dateStart||e.date||todayISO()}"></div>
-      <div class="field"><label>Fecha fin <span class="hint">cierre del trade</span></label><input type="date" id="f_dateEnd" value="${e.dateEnd||''}"></div>
+      <div class="field"><label>Fecha</label><input type="date" id="f_date" value="${e.date||todayISO()}"></div>
+      <div class="field"><label>Símbolo</label><select id="f_symbol">${SYMBOLS.map(s=>`<option ${(e.symbol||'MNQ')===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
-    <div class="field"><label>Símbolo <span class="hint">par de divisas</span></label>
-      <input type="text" id="f_symbol" value="${e.symbol||''}" placeholder="ex. EURUSD, GBPJPY..." style="text-transform:uppercase">
+    <div class="field-row">
+      <div class="field"><label>Setup</label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>Sesión</label><select id="f_session">${SESSIONS.map(s=>`<option ${e.session===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>¿Dónde empezó el movimiento? <span class="hint">estructura CRT</span></label>
+      <select id="f_moveType" onchange="toggleMoveOther()">
+        <option value="" ${!e.moveType?'selected':''}>— no registrado —</option>
+        ${Object.entries(MOVE_TYPES).map(([k,l])=>`<option value="${k}" ${e.moveType===k?'selected':''}>${l}</option>`).join('')}
+      </select>
+      <input type="text" id="f_moveOther" placeholder="Especifica qué momento..." value="${e.moveOther||''}" style="margin-top:8px;display:none">
+    </div>
+    <div class="field"><label>¿Hubo entrada por SMT? <span class="hint">RS Scalp — si apareció el señal, entraras o no</span></label>
+      <select id="f_smt" onchange="toggleSmt()">
+        <option value="" ${!e.smt?'selected':''}>— no hubo / no registrado —</option>
+        <option value="yes" ${e.smt==='yes'?'selected':''}>Sí, apareció entrada por SMT</option>
+      </select>
+    </div>
+    <div id="f_smtDetails" style="display:none">
+      <div class="field-row">
+        <div class="field"><label>Resultado del SMT</label>
+          <select id="f_smtResult">
+            <option value="tp" ${e.smtResult==='tp'?'selected':''}>TP (habría ganado)</option>
+            <option value="sl" ${e.smtResult==='sl'?'selected':''}>SL (habría perdido)</option>
+            <option value="be" ${e.smtResult==='be'?'selected':''}>BE</option>
+          </select>
+        </div>
+        <div class="field"><label>Timing respecto apertura NY</label>
+          <select id="f_smtTiming">
+            <option value="before" ${e.smtTiming==='before'?'selected':''}>Antes de apertura (&lt;9:30)</option>
+            <option value="open" ${e.smtTiming==='open'?'selected':''}>En apertura (9:30-10:00)</option>
+            <option value="after" ${e.smtTiming==='after'?'selected':''}>Después (&gt;10:00)</option>
+          </select>
+        </div>
+      </div>
     </div>
     <div class="field-row">
       <div class="field"><label>Cuenta</label><select id="f_account" onchange="onAccountChange()"><option value="">— sin asignar —</option>${DB.accounts.map(a=>{
@@ -1781,6 +1929,8 @@ function tradeModal(t){
   $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',updatePlanCount));
   updatePlanCount();
   onRealizedRChange();
+  toggleMoveOther();
+  toggleSmt();
 }
 
 // Deduce el resultado a partir del R realizado (single source of truth)
@@ -1951,10 +2101,15 @@ function saveTrade(id){
   const existing=id?DB.trades.find(x=>x.id===id):null;
   const t={
     id:id||uid(),
-    dateStart:$('#f_dateStart').value,
-    dateEnd:$('#f_dateEnd').value,
-    date:$('#f_dateStart').value, // compat: 'date' = fecha inicio (usada por calendario/orden)
+    date:$('#f_date').value,
     symbol:$('#f_symbol').value.trim().toUpperCase(),
+    setup:$('#f_setup').value,
+    session:$('#f_session').value,
+    moveType:$('#f_moveType').value,
+    moveOther:$('#f_moveType').value==='other'?$('#f_moveOther').value.trim():'',
+    smt:$('#f_smt').value,
+    smtResult:$('#f_smt').value==='yes'?$('#f_smtResult').value:'',
+    smtTiming:$('#f_smt').value==='yes'?$('#f_smtTiming').value:'',
     account:$('#f_account').value,
     phase: $('#f_phase').value || (()=>{ const acc=DB.accounts.find(a=>a.name===$('#f_account').value); return acc? (acc.phase==='Funded'?'funded':'eval') : ''; })(),
     plannedR:parseFloat($('#f_plannedR').value)||0,
@@ -2000,19 +2155,7 @@ function editAccount(id){ accountModal(DB.accounts.find(a=>a.id===id)); }
 function accountModal(a){
   const e=a||{};
   const firms=Object.keys(DB.firms||{});
-  if(!firms.length){
-    $('#modalBg').innerHTML=`<div class="modal">
-      <h2>Nueva cuenta <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
-      <div class="insight warn">Aún no has definido ninguna firma. Primero crea una firma con sus reglas (drawdown, target, etc.) desde <b>⚙ Editar reglas</b>, y luego podrás añadir cuentas de esa firma.</div>
-      <div class="modal-actions">
-        <button class="btn ghost" onclick="closeModal()">Cerrar</button>
-        <button class="btn primary" onclick="closeModal();openFirmEditor()">⚙ Editar reglas</button>
-      </div>
-    </div>`;
-    $('#modalBg').classList.add('show');
-    return;
-  }
-  const curFirm=e.firm||firms[0]||'';
+  const curFirm=e.firm||firms[0]||'LucidFlex';
   const plans=DB.firms[curFirm]?Object.keys(DB.firms[curFirm].plans):[];
   const curPlan=e.plan||plans[0]||'';
   $('#modalBg').innerHTML=`<div class="modal">
@@ -2296,7 +2439,7 @@ function exportData(){
   const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=url; a.download=`swingdesk-${todayISO()}.json`; a.click();
+  a.href=url; a.download=`crtdesk-${todayISO()}.json`; a.click();
   URL.revokeObjectURL(url); toast('Datos exportados');
 }
 function importData(file){
@@ -2445,7 +2588,7 @@ function exportAIReport(){
   const blob=new Blob([report],{type:'text/plain'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=url; a.download=`swingdesk-informe-${todayISO()}.txt`; a.click();
+  a.href=url; a.download=`crtdesk-informe-${todayISO()}.txt`; a.click();
   URL.revokeObjectURL(url);
   toast('Informe para IA exportado');
 }
