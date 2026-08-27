@@ -1664,7 +1664,7 @@ const PLAN_CHECKLIST=[
   'Poner BE solo al llegar al primer objetivo o más (nunca antes)',
   'Solo puedo cerrar antes si 2/3 pares han llegado ya al DOL o a un objetivo importante'
 ];
-const SETUPS=['Setup A','Setup B','Setup C','Pares','Otro'];
+const SETUPS=['Setup A','Setup B','Setup C'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
 const SESSIONS=['Londres (9-12)','London Lunch (12-15)','NY (15:30+)','Otra'];
 // Origen del movimiento (estructura CRT en NY)
@@ -1846,9 +1846,10 @@ function tradeModal(t){
       </div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Cuenta</label><select id="f_account" onchange="onAccountChange()"><option value="">— sin asignar —</option>${DB.accounts.map(a=>{
+      <div class="field"><label>Cuenta</label><select id="f_account" onchange="onAccountChange()"><option value="">— sin asignar —</option>${DB.accounts.filter(a=>a.status!=='perdida' || e.account===a.name).map(a=>{
         const tag = a.phase==='Funded'?' (fondeada)':' (eval)';
-        return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}</option>`;
+        const dead = a.status==='perdida'?' (quemada)':'';
+        return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}${dead}</option>`;
       }).join('')}</select></div>
       <div class="field"><label>Fase del trade <span class="hint">en qué fase se hizo</span></label>
         <select id="f_phase">
