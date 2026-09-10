@@ -1663,14 +1663,14 @@ const PLAN_MANIPULACION=[
   'No tener rango contrario importante cerca',
   'Tendencia a favor',
   '1 SL por cuenta por día',
-  'Poner BE solo al llegar al primer objetivo o más (nunca antes)',
+  'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
   'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo'
 ];
 const PLAN_CONTINUACION=[
   'Ir a favor del DOL',
   'Tendencia a favor',
   'SL no ajustado',
-  'Poner BE solo al llegar al 3r cuadrante (nunca antes)',
+  'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
   'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
   'No tener objetivos importantes cerca'
 ];
