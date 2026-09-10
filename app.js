@@ -682,8 +682,9 @@ function renderDiscipline(v, T){
     ${(()=>{
       const withPlan=T.filter(t=>t.planChecked!=null);
       if(withPlan.length<3) return '';
-      const full=withPlan.filter(t=>(t.planChecked||[]).length===PLAN_CHECKLIST.length);
-      const partial=withPlan.filter(t=>(t.planChecked||[]).length<PLAN_CHECKLIST.length);
+      const planLen=t=>planChecklist(t.entryType).length;
+      const full=withPlan.filter(t=>(t.planChecked||[]).length===planLen(t));
+      const partial=withPlan.filter(t=>(t.planChecked||[]).length<planLen(t));
       if(!full.length||!partial.length) return '';
       const diff=expectancy(full)-expectancy(partial);
       return `<div class="card" style="margin-top:14px">
@@ -1654,7 +1655,8 @@ const FLAG_LABELS={
   bad_analysis:'Error de análisis'
 };
 // Plan de trading — checklist que aparece al registrar
-const PLAN_CHECKLIST=[
+// Checklist según tipo de entrada
+const PLAN_MANIPULACION=[
   'Tener el DOL claro e ir solo a favor del DOL (Innegociable)',
   'SL donde se invalide el trade',
   'Tener rangos LTF (8h-2h) a favor',
@@ -1662,9 +1664,31 @@ const PLAN_CHECKLIST=[
   'Tendencia a favor',
   '1 SL por cuenta por día',
   'Poner BE solo al llegar al primer objetivo o más (nunca antes)',
-  'Solo puedo cerrar antes si 2/3 pares han llegado ya al DOL o a un objetivo importante'
+  'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo'
 ];
-const SETUPS=['Setup A','Setup B','Setup C'];
+const PLAN_CONTINUACION=[
+  'Ir a favor del DOL',
+  'Tendencia a favor',
+  'SL no ajustado',
+  'Poner BE solo al llegar al 3r cuadrante (nunca antes)',
+  'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
+  'No tener objetivos importantes cerca'
+];
+// Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible)
+function planChecklist(entryType){
+  return entryType==='continuacion' ? PLAN_CONTINUACION : PLAN_MANIPULACION;
+}
+// Calcula el setup automático según fallos: 0=A+, 1=A, 2=B, 3+=C
+function autoSetup(checkedCount, total){
+  const fails = total - checkedCount;
+  if(fails<=0) return 'A+';
+  if(fails===1) return 'A';
+  if(fails===2) return 'B';
+  return 'C';
+}
+// Compat: PLAN_CHECKLIST apunta a manipulación (para código antiguo)
+const PLAN_CHECKLIST=PLAN_MANIPULACION;
+const SETUPS=['Setup A+','Setup A','Setup B','Setup C'];
 const SYMBOLS=['MNQ','MES','MYM','M2K','MGC','MCL','M6E','NQ','ES','YM','GC','CL','EURAUD','Otro'];
 const SESSIONS=['Londres (9-12)','London Lunch (12-15)','NY (15:30+)','Otra'];
 // Origen del movimiento (estructura CRT en NY)
@@ -1796,14 +1820,15 @@ function tradeModal(t){
   const planChecked=e.planChecked||[];
   $('#modalBg').innerHTML=`<div class="modal">
     <h2>${t?'Editar trade':'Nuevo trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <div class="field"><label>Tipo de entrada</label>
+      <select id="f_entryType" onchange="rebuildChecklist()">
+        <option value="manipulacion" ${(e.entryType||'manipulacion')==='manipulacion'?'selected':''}>Manipulación</option>
+        <option value="continuacion" ${e.entryType==='continuacion'?'selected':''}>Continuación</option>
+      </select>
+    </div>
     <div class="plan-box">
       <div class="plan-title">📋 Plan de trading — checklist antes de entrar</div>
-      <div id="f_plan">
-        ${PLAN_CHECKLIST.map((rule,i)=>`<label class="plan-item">
-          <input type="checkbox" data-plan="${i}" ${planChecked.includes(i)?'checked':''}>
-          <span>${rule}</span>
-        </label>`).join('')}
-      </div>
+      <div id="f_plan"></div>
       <div class="plan-count" id="f_planCount"></div>
     </div>
     <div class="field-row">
@@ -1811,7 +1836,7 @@ function tradeModal(t){
       <div class="field"><label>Símbolo</label><select id="f_symbol">${SYMBOLS.map(s=>`<option ${(e.symbol||'MNQ')===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Setup</label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>Setup <span class="hint" id="f_setupAuto"></span></label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
       <div class="field"><label>Sesión</label><select id="f_session">${SESSIONS.map(s=>`<option ${e.session===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>¿Dónde empezó el movimiento? <span class="hint">estructura CRT</span></label>
@@ -1919,19 +1944,47 @@ function tradeModal(t){
   $('#modalBg').classList.add('show');
   $('#modalBg')._flags=[...flags];
   $('#modalBg')._images=[...(e.images||[])];
+  $('#modalBg')._planChecked=[...planChecked];
+  $('#modalBg')._setupTouched=!!(e.setup); // si ya tenía setup, no lo pisamos al abrir
   renderTradeThumbs();
-  // contador de checklist del plan
-  const updatePlanCount=()=>{
-    const checked=$$('#f_plan input[type=checkbox]').filter(c=>c.checked).length;
-    const total=PLAN_CHECKLIST.length;
-    const el=$('#f_planCount');
-    if(el) el.innerHTML=`<span class="${checked===total?'pos':checked>=total-1?'':'neg'}">${checked}/${total} reglas cumplidas</span>${checked<total?' — revisa antes de entrar':' ✓ setup A+'}`;
-  };
-  $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',updatePlanCount));
-  updatePlanCount();
+  rebuildChecklist();
   onRealizedRChange();
   toggleMoveOther();
   toggleSmt();
+}
+
+// (Re)dibuja la checklist según el tipo de entrada y engancha el conteo + setup automático
+function rebuildChecklist(){
+  const box=$('#f_plan'); if(!box) return;
+  const type=$('#f_entryType')?.value||'manipulacion';
+  const list=planChecklist(type);
+  const saved=$('#modalBg')?._planChecked||[];
+  box.innerHTML=list.map((rule,i)=>`<label class="plan-item">
+    <input type="checkbox" data-plan="${i}" ${saved.includes(i)?'checked':''}>
+    <span>${rule}</span>
+  </label>`).join('');
+  const update=()=>{
+    const checks=$$('#f_plan input[type=checkbox]');
+    const checked=checks.filter(c=>c.checked).length;
+    const total=list.length;
+    // guardar los índices marcados
+    $('#modalBg')._planChecked=checks.map((c,i)=>c.checked?i:-1).filter(i=>i>=0);
+    const el=$('#f_planCount');
+    if(el) el.innerHTML=`<span class="${checked===total?'pos':checked>=total-1?'':'neg'}">${checked}/${total} reglas cumplidas</span>${checked<total?' — revisa antes de entrar':' ✓ todas cumplidas'}`;
+    // setup automático
+    const setup='Setup '+autoSetup(checked,total);
+    const sel=$('#f_setup');
+    const auto=$('#f_setupAuto');
+    if(sel && !$('#modalBg')._setupManual){ sel.value=setup; }
+    if(auto) auto.innerHTML=`(auto: <b>${autoSetup(checked,total)}</b>)`;
+  };
+  $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',update));
+  // si el usuario cambia el setup a mano, respetarlo
+  const sel=$('#f_setup');
+  if(sel) sel.addEventListener('change',()=>{ $('#modalBg')._setupManual=true; });
+  update();
+  // al reconstruir por cambio de tipo, el setup vuelve a automático
+  if(!$('#modalBg')._setupTouched) $('#modalBg')._setupManual=false;
 }
 
 // Deduce el resultado a partir del R realizado (single source of truth)
@@ -2127,7 +2180,8 @@ function saveTrade(id){
     flags:[...flags],
     note:$('#f_note').value.trim(),
     images:[...($('#modalBg')._images||[])],
-    planChecked:$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan)
+    planChecked:$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan),
+    entryType:$('#f_entryType')?.value||'manipulacion'
   };
   if(id){ const i=DB.trades.findIndex(x=>x.id===id); DB.trades[i]=t; }
   else DB.trades.push(t);
