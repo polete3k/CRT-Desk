@@ -1664,7 +1664,8 @@ const PLAN_MANIPULACION=[
   'Tendencia a favor',
   '1 SL por cuenta por día',
   'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
-  'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo'
+  'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
+  'Cerré plataforma'
 ];
 const PLAN_CONTINUACION=[
   'Ir a favor del DOL',
@@ -1672,7 +1673,8 @@ const PLAN_CONTINUACION=[
   'SL no ajustado',
   'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
   'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
-  'No tener objetivos importantes cerca'
+  'No tener objetivos importantes cerca',
+  'Cerré plataforma'
 ];
 // Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible)
 function planChecklist(entryType){
