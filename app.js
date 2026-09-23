@@ -1660,7 +1660,7 @@ const PLAN_MANIPULACION=[
   'Tener el DOL claro e ir solo a favor del DOL (Innegociable)',
   'SL donde se invalide el trade',
   'Tener rangos LTF (8h-2h) a favor',
-  'No tener rango contrario importante cerca',
+  'No tener rangos importantes en contra (12h o más)',
   'Tendencia a favor',
   '1 SL por cuenta por día',
   'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
@@ -1673,7 +1673,7 @@ const PLAN_CONTINUACION=[
   'SL no ajustado',
   'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
   'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
-  'No tener objetivos importantes cerca',
+  'No tener rangos importantes en contra (12h o más)',
   'Cerré plataforma'
 ];
 // Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible)
