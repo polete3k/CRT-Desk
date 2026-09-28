@@ -1665,7 +1665,9 @@ const PLAN_MANIPULACION=[
   '1 SL por cuenta por día',
   'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
   'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
-  'Cerré plataforma'
+  'Cerré plataforma',
+  'A un trade de fondear: solo setup A+',
+  'Solo se opera desde el ordenador, con el gráfico completo delante y el checklist leído. Desde el móvil no se abre nunca una posición'
 ];
 const PLAN_CONTINUACION=[
   'Ir a favor del DOL',
@@ -1674,7 +1676,9 @@ const PLAN_CONTINUACION=[
   'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
   'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
   'No tener rangos importantes en contra (12h o más)',
-  'Cerré plataforma'
+  'Cerré plataforma',
+  'A un trade de fondear: solo setup A+',
+  'Solo se opera desde el ordenador, con el gráfico completo delante y el checklist leído. Desde el móvil no se abre nunca una posición'
 ];
 // Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible)
 function planChecklist(entryType){
@@ -1947,16 +1951,21 @@ function tradeModal(t){
   $('#modalBg')._flags=[...flags];
   $('#modalBg')._images=[...(e.images||[])];
   $('#modalBg')._planChecked=[...planChecked];
-  $('#modalBg')._setupTouched=!!(e.setup); // si ya tenía setup, no lo pisamos al abrir
+  // Si el trade ya tenía un setup guardado, lo respetamos: no se recalcula solo al abrir.
+  // Los trades antiguos conservan su setup aunque se añadan reglas nuevas después.
+  $('#modalBg')._setupManual=!!(e.setup);
+  $('#modalBg')._isExisting=!!(e.id||e.setup);
   renderTradeThumbs();
-  rebuildChecklist();
+  rebuildChecklist(true);
   onRealizedRChange();
   toggleMoveOther();
   toggleSmt();
 }
 
-// (Re)dibuja la checklist según el tipo de entrada y engancha el conteo + setup automático
-function rebuildChecklist(){
+// (Re)dibuja la checklist según el tipo de entrada y engancha el conteo + setup automático.
+// initial=true → apertura del modal: NO recalcula el setup si el trade ya tenía uno guardado
+// (así los trades antiguos conservan su setup aunque después se añadan reglas nuevas).
+function rebuildChecklist(initial){
   const box=$('#f_plan'); if(!box) return;
   const type=$('#f_entryType')?.value||'manipulacion';
   const list=planChecklist(type);
@@ -1965,28 +1974,28 @@ function rebuildChecklist(){
     <input type="checkbox" data-plan="${i}" ${saved.includes(i)?'checked':''}>
     <span>${rule}</span>
   </label>`).join('');
-  const update=()=>{
+  // Muestra el conteo y (si procede) recalcula el setup automático.
+  // recalc=true solo cuando el usuario marca/desmarca una casilla o cambia el tipo de entrada.
+  const update=(recalc)=>{
     const checks=$$('#f_plan input[type=checkbox]');
     const checked=checks.filter(c=>c.checked).length;
     const total=list.length;
-    // guardar los índices marcados
     $('#modalBg')._planChecked=checks.map((c,i)=>c.checked?i:-1).filter(i=>i>=0);
     const el=$('#f_planCount');
     if(el) el.innerHTML=`<span class="${checked===total?'pos':checked>=total-1?'':'neg'}">${checked}/${total} reglas cumplidas</span>${checked<total?' — revisa antes de entrar':' ✓ todas cumplidas'}`;
-    // setup automático
-    const setup='Setup '+autoSetup(checked,total);
     const sel=$('#f_setup');
     const auto=$('#f_setupAuto');
-    if(sel && !$('#modalBg')._setupManual){ sel.value=setup; }
+    // El setup solo se recalcula automáticamente al tocar la checklist (recalc), nunca al abrir un trade existente.
+    if(recalc && sel){ sel.value='Setup '+autoSetup(checked,total); $('#modalBg')._setupManual=false; }
     if(auto) auto.innerHTML=`(auto: <b>${autoSetup(checked,total)}</b>)`;
   };
-  $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',update));
-  // si el usuario cambia el setup a mano, respetarlo
+  // Al marcar/desmarcar una regla: sí recalcula el setup.
+  $$('#f_plan input[type=checkbox]').forEach(c=>c.addEventListener('change',()=>update(true)));
+  // Si el usuario elige el setup a mano, se respeta.
   const sel=$('#f_setup');
   if(sel) sel.addEventListener('change',()=>{ $('#modalBg')._setupManual=true; });
-  update();
-  // al reconstruir por cambio de tipo, el setup vuelve a automático
-  if(!$('#modalBg')._setupTouched) $('#modalBg')._setupManual=false;
+  // Pintada: recalcula el setup solo si NO está fijado a mano ni es un trade existente con setup guardado.
+  update(!$('#modalBg')._setupManual);
 }
 
 // Deduce el resultado a partir del R realizado (single source of truth)
