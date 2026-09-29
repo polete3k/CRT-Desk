@@ -1324,12 +1324,33 @@ function renderROI(v, T){
    ============================================================ */
 let CAL_MONTH = new Date().getMonth();
 let CAL_YEAR = new Date().getFullYear();
+let CAL_VIEW = 'pnl'; // 'pnl' o 'disciplina'
 
 function calShift(delta){
   CAL_MONTH += delta;
   if(CAL_MONTH<0){ CAL_MONTH=11; CAL_YEAR--; }
   if(CAL_MONTH>11){ CAL_MONTH=0; CAL_YEAR++; }
   render();
+}
+function calSetView(view){ CAL_VIEW=view; render(); }
+
+// Convierte un setup en puntuación numérica (A+=4, A=3, B=2, C=1). Sin setup → null.
+function setupScore(setup){
+  if(!setup) return null;
+  const s=setup.replace('Setup ','').trim();
+  return s==='A+'?4:s==='A'?3:s==='B'?2:s==='C'?1:null;
+}
+// Media de setups de un día → {score, label, color, chipBg, chipFg} para la vista disciplina.
+// Días con trades sin setup asignado → gris (score null). Colores inline (no dependen del index.html).
+function dayDisciplina(trades){
+  const scores=trades.map(t=>setupScore(t.setup)).filter(s=>s!=null);
+  if(!scores.length) return {score:null,label:'SIN SETUP',border:'var(--line)',bg:'transparent',chipBg:'rgba(138,151,168,.16)',chipFg:'var(--ink-faint)'};
+  const avg=scores.reduce((a,b)=>a+b,0)/scores.length;
+  // puntos de corte: A+ (≥3.5) verde fuerte, A (2.5–3.5) verde suave, B (1.5–2.5) amarillo, C (<1.5) rojo
+  if(avg>=3.5) return {score:avg,label:'A+',border:'#3ddc84',bg:'rgba(61,220,132,.18)',chipBg:'rgba(61,220,132,.28)',chipFg:'#3ddc84'};
+  if(avg>=2.5) return {score:avg,label:'A', border:'rgba(61,220,132,.5)',bg:'rgba(61,220,132,.09)',chipBg:'rgba(61,220,132,.18)',chipFg:'#3ddc84'};
+  if(avg>=1.5) return {score:avg,label:'B', border:'rgba(224,176,64,.6)',bg:'rgba(224,176,64,.1)',chipBg:'rgba(224,176,64,.2)',chipFg:'#e0b040'};
+  return {score:avg,label:'C', border:'rgba(255,90,90,.6)',bg:'rgba(255,90,90,.1)',chipBg:'rgba(255,90,90,.2)',chipFg:'#ff6b6b'};
 }
 
 function renderCalendar(v, T){
@@ -1345,10 +1366,11 @@ function renderCalendar(v, T){
     const [yy,mm,dd]=t.date.split('-').map(Number);
     if(yy===CAL_YEAR && (mm-1)===CAL_MONTH){
       const day=dd;
-      byDay[day]=byDay[day]||{pnl:0,n:0,dirty:false,r:0,phases:new Set()};
+      byDay[day]=byDay[day]||{pnl:0,n:0,dirty:false,r:0,phases:new Set(),trades:[]};
       byDay[day].pnl+=(t.pnl||0);
       byDay[day].r+=(t.realizedR||0);
       byDay[day].n++;
+      byDay[day].trades.push(t);
       if((t.flags||[]).some(f=>f!=='clean')) byDay[day].dirty=true;
       const ph=tradePhase(t); if(ph) byDay[day].phases.add(ph);
     }
@@ -1373,21 +1395,35 @@ function renderCalendar(v, T){
     const noday=ntList.find(n=>(n.type||'noday')==='noday');
     const unfilledCount=ntList.filter(n=>n.type==='unfilled').length;
     if(d){
-      const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
-      const phases=[...d.phases];
-      const phaseLabel = phases.length>1 ? 'EVAL·FUND' : phases.length===1 ? (phases[0]==='funded'?'FUNDED':'EVAL') : '';
-      const phaseCls = phases.length>1 ? 'mixed' : phases.length===1 ? phases[0] : '';
-      const chips = `<div class="cal-chips">
-        ${phaseLabel?`<span class="cal-chip ${phaseCls}">${phaseLabel}</span>`:''}
-        ${d.dirty?'<span class="cal-chip err">REGLA SALTADA</span>':''}
-        ${unfilledCount?`<span class="cal-chip ne" title="entrada(s) no ejecutada(s)">NO EJEC${unfilledCount>1?' ×'+unfilledCount:''}</span>`:''}
-      </div>`;
-      cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
-        <div class="daynum">${day}</div>
-        ${chips}
-        <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
-        <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
-      </div>`;
+      if(CAL_VIEW==='disciplina'){
+        // Vista disciplina: color por setup medio del día (A+ verde fuerte … C rojo). Estilos inline.
+        const disc=dayDisciplina(d.trades);
+        const chips = `<div class="cal-chips">
+          <span class="cal-chip" style="background:${disc.chipBg};color:${disc.chipFg}">${disc.label}</span>
+          ${d.dirty?'<span class="cal-chip err">REGLA SALTADA</span>':''}
+        </div>`;
+        cells+=`<div class="cal-cell clickable ${isToday?'today':''}" style="border-color:${disc.border};background:${disc.bg}" onclick="calDayDetail('${dateStr}')">
+          <div class="daynum">${day}</div>
+          ${chips}
+          <div class="meta">${d.n} trade${d.n>1?'s':''}</div>
+        </div>`;
+      } else {
+        const klass=d.pnl>0?'win':d.pnl<0?'loss':'';
+        const phases=[...d.phases];
+        const phaseLabel = phases.length>1 ? 'EVAL·FUND' : phases.length===1 ? (phases[0]==='funded'?'FUNDED':'EVAL') : '';
+        const phaseCls = phases.length>1 ? 'mixed' : phases.length===1 ? phases[0] : '';
+        const chips = `<div class="cal-chips">
+          ${phaseLabel?`<span class="cal-chip ${phaseCls}">${phaseLabel}</span>`:''}
+          ${d.dirty?'<span class="cal-chip err">REGLA SALTADA</span>':''}
+          ${unfilledCount?`<span class="cal-chip ne" title="entrada(s) no ejecutada(s)">NO EJEC${unfilledCount>1?' ×'+unfilledCount:''}</span>`:''}
+        </div>`;
+        cells+=`<div class="cal-cell clickable ${klass} ${isToday?'today':''}" onclick="calDayDetail('${dateStr}')">
+          <div class="daynum">${day}</div>
+          ${chips}
+          <div class="pnl ${cls(d.pnl)}">${fmt$(d.pnl)}</div>
+          <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
+        </div>`;
+      }
     } else if(noday){
       cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${noday.id}')" title="${NOTRADE_REASONS[noday.reason]||''}">
         <div class="daynum">${day}</div>
@@ -1404,7 +1440,17 @@ function renderCalendar(v, T){
     }
   }
 
+  // stats de disciplina del mes
+  const discDays=monthDays.map(d=>dayDisciplina(d.trades)).filter(x=>x.score!=null);
+  const discAvg=discDays.length?discDays.reduce((s,x)=>s+x.score,0)/discDays.length:null;
+  const discLabel=discAvg==null?'—':discAvg>=3.5?'A+':discAvg>=2.5?'A':discAvg>=1.5?'B':'C';
+
   v.innerHTML=`
+    <div class="phase-filter" style="margin-bottom:14px">
+      <button class="phase-btn ${CAL_VIEW==='pnl'?'active':''}" onclick="calSetView('pnl')">💶 PnL</button>
+      <button class="phase-btn ${CAL_VIEW==='disciplina'?'active':''}" onclick="calSetView('disciplina')">🎯 Disciplina</button>
+    </div>
+    ${CAL_VIEW==='disciplina'?`<div class="insight" style="margin-bottom:14px">Aquí no importa el dinero, sino si seguiste tu plan. Cada día se colorea por la calidad media de tus setups: <b>A+</b> verde fuerte, <b>A</b> verde, <b>B</b> amarillo, <b>C</b> rojo. Lo importante es acumular días verdes de disciplina, pase lo que pase con el PnL.</div>`:''}
     <div class="cal-head">
       <button class="btn ghost sm icon" onclick="calShift(-1)">←</button>
       <div class="month">${monthName}</div>
@@ -1415,10 +1461,18 @@ function renderCalendar(v, T){
       ${cells}
     </div>
     <div class="cal-month-stats">
+      ${CAL_VIEW==='disciplina'?`
+      <div class="s"><span class="k">Nota media del mes</span><span class="v ${discLabel==='A+'||discLabel==='A'?'pos':discLabel==='C'?'neg':''}">${discLabel}</span></div>
+      <div class="s"><span class="k">Días A+/A</span><span class="v pos">${discDays.filter(x=>x.score>=2.5).length}</span></div>
+      <div class="s"><span class="k">Días B</span><span class="v" style="color:var(--amber)">${discDays.filter(x=>x.score>=1.5&&x.score<2.5).length}</span></div>
+      <div class="s"><span class="k">Días C</span><span class="v neg">${discDays.filter(x=>x.score<1.5).length}</span></div>
+      <div class="s"><span class="k">Días operados</span><span class="v">${monthDays.length}</span></div>
+      `:`
       <div class="s"><span class="k">P&L del mes</span><span class="v ${cls(monthPnl)}">${fmt$(monthPnl)}</span></div>
       <div class="s"><span class="k">Días verdes</span><span class="v pos">${greenDays}</span></div>
       <div class="s"><span class="k">Días rojos</span><span class="v neg">${redDays}</span></div>
       <div class="s"><span class="k">Días operados</span><span class="v">${monthDays.length}</span></div>
+      `}
       ${(()=>{
         const ntMonth=(DB.noTradeDays||[]).filter(n=>{
           const [yy,mm]=n.date.split('-').map(Number);
