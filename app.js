@@ -337,15 +337,21 @@ function monthBreakdown(trades){
    Para cada nivel de TP simula: si el MFE del trade >= TP -> habría cobrado ese TP (+TP R).
    Si no -> el trade se habría ido al SL (-1R), asumiendo SL fijo de -1R.
    Devuelve la expectancy de cada nivel y cuál es el óptimo. */
+// Formatea un nivel de TP sin redondear de más: 1 → "1", 1.25 → "1,25", 0.5 → "0,5"
+function fmtTP(x){ return String(Math.round(x*100)/100).replace('.',','); }
 function optimalRR(trades){
   const withMfe = trades.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
   if(withMfe.length<5) return { enough:false, n:withMfe.length };
-  const levels=[0.5,1,1.5,2,2.5,3,3.5,4];
+  // Escala fina (0,25 en 0,25) para que el óptimo no quede clavado en el primer nivel.
+  const levels=[]; for(let x=0.25;x<=4.0001;x+=0.25) levels.push(Math.round(x*100)/100);
   const curve = levels.map(tp=>{
     let sumR=0, wins=0;
     withMfe.forEach(t=>{
-      if(t.mfe>=tp){ sumR+=tp; wins++; }   // el precio alcanzó este TP
-      else sumR+=-1;                         // no llegó -> SL
+      const mfe=Math.max(0,t.mfe);
+      const mae=(t.mae!=null&&!isNaN(t.mae))?Math.abs(t.mae):null;
+      if(mfe>=tp){ sumR+=tp; wins++; }                       // el precio alcanzó este TP
+      else if(t.result==='loss' || (mae!=null && mae>=1)) sumR+=-1; // no llegó y el precio tocó el SL
+      // no llegó al TP NI tocó el SL (BE, cierre manual...) → 0R: no sabemos más, no lo contamos como pérdida
     });
     return { tp, exp:sumR/withMfe.length, wr:wins/withMfe.length*100 };
   });
@@ -362,21 +368,40 @@ function optimalRR(trades){
 // COSTE DE LA INDISCIPLINA — métrica estrella
 // Diferencia entre lo planificado y lo realizado en trades marcados con error.
 // Si cerraste antes de tiempo un ganador, o entraste por FOMO, etc.
+// Errores de ENTRADA: el trade no debería haber existido → su resultado entero es el coste.
+const ENTRY_ERROR_FLAGS=['fomo','no_setup','revenge','over_max_stops','against_bias','bad_analysis'];
+// Coste real (en R) de los errores de UN trade. Positivo = te costó; negativo = el error salió bien por suerte.
+//  · Error de entrada → -R realizado (si no hubieras entrado, tendrías 0R).
+//  · Cierre temprano → solo cuesta si el precio SÍ llegó a tu TP (MFE ≥ R planificado): TP − realizado.
+//  · Moví el stop → lo perdido más allá de -1R.
+//  · Sobre-dimensioné → no cambia el R (el daño es en $), coste 0R.
+function tradeErrorCost(t){
+  const flags=(t.flags||[]).filter(f=>f!=='clean');
+  if(!flags.length) return 0;
+  const r=t.realizedR||0;
+  if(flags.some(f=>ENTRY_ERROR_FLAGS.includes(f))) return -r;
+  let cost=0;
+  if(flags.includes('early_close')){
+    const mfe=t.mfe, plan=t.plannedR||0;
+    if(mfe!=null && !isNaN(mfe) && mfe>=plan) cost+=Math.max(0, plan-r);
+  }
+  if(flags.includes('moved_stop')) cost+=Math.max(0, -r-1);
+  return cost;
+}
 function disciplineCost(trades){
-  let lostR = 0, lost$ = 0, flaggedCount = 0, cleanCount = 0;
+  let lostR = 0, lost$ = 0, luckyR = 0, luckyN = 0, flaggedCount = 0, cleanCount = 0;
   trades.forEach(t=>{
     const hasError = (t.flags||[]).some(f=>f!=='clean');
     if(hasError){
       flaggedCount++;
-      // R perdido = lo que el plan habria dado menos lo realizado (solo si el plan era mejor)
-      const diff = (t.plannedR||0) - (t.realizedR||0);
-      if(diff>0){
-        lostR += diff;
-        lost$ += diff * (t.riskUSD||0);
-      }
+      const c=tradeErrorCost(t);
+      lostR += c;
+      lost$ += c * (t.riskUSD||0);
+      if(c<0){ luckyR+=-c; luckyN++; }
     } else { cleanCount++; }
   });
-  return { lostR, lost$, flaggedCount, cleanCount, total: trades.length };
+  // lostR es NETO: lo que tus errores te han costado de verdad (las ganancias por suerte lo compensan).
+  return { lostR, lost$, luckyR, luckyN, flaggedCount, cleanCount, total: trades.length };
 }
 
 // Tasa de disciplina (% trades sin errores)
@@ -547,13 +572,13 @@ function renderOverview(v, T){
       <div class="disc-wrap">
         ${gauge(dr, 'disciplina', dr>=80?'var(--green)':dr>=60?'var(--amber)':'var(--red)')}
         <div class="disc-detail">
-          <div class="row"><span class="k">R perdido por errores</span><span class="v neg">-${fmt(dc.lostR,2)}R</span></div>
-          <div class="row"><span class="k">En dinero</span><span class="v neg">${fmt$(-dc.lost$)}</span></div>
+          <div class="row"><span class="k">R perdido por errores</span><span class="v ${dc.lostR>0?'neg':'pos'}">${fmtR(-dc.lostR||0)}</span></div>
+          <div class="row"><span class="k">En dinero</span><span class="v ${dc.lostR>0?'neg':'pos'}">${fmt$(-dc.lost$||0)}</span></div>
           <div class="row"><span class="k">Trades con error</span><span class="v">${dc.flaggedCount} / ${dc.total}</span></div>
           <div class="row"><span class="k">Racha días limpios</span><span class="v pos">${cleanDayStreak(T)} 🔥</span></div>
         </div>
       </div>
-      ${dc.lostR>0?`<div class="insight bad" style="margin-top:16px">Siguiendo tu plan al pie de la letra habrías sumado <b>${fmt(dc.lostR,2)}R más</b> (${fmt$(dc.lost$)}). Eso es ${exp>0?Math.round(dc.lostR/exp):'—'} trades ganadores tirados por errores de ejecución.</div>`:`<div class="insight" style="margin-top:16px">Sin coste de indisciplina detectado en este periodo. Mantén el registro honesto de los flags para que la métrica siga siendo útil.</div>`}
+      ${dc.lostR>0?`<div class="insight bad" style="margin-top:16px">Siguiendo tu plan habrías sumado <b>${fmt(dc.lostR,2)}R más</b> (${fmt$(dc.lost$)}). Se calcula así: los trades que no debían existir (FOMO, sin setup, revenge...) cuentan su resultado entero, y los cierres por miedo solo cuentan si el precio llegó de verdad a tu TP.${dc.luckyN?` Ojo: ${dc.luckyN} trade(s) con error salieron bien por suerte (+${fmt(dc.luckyR,2)}R); ya están descontados, pero no cuentes con que se repita.`:''}</div>`:dc.flaggedCount?`<div class="insight warn" style="margin-top:16px">En neto tus errores no te han restado R: ${dc.luckyN} trade(s) con error salieron bien por suerte (+${fmt(dc.luckyR,2)}R). Que salga bien no lo convierte en buena decisión.</div>`:`<div class="insight" style="margin-top:16px">Sin coste de indisciplina detectado en este periodo. Mantén el registro honesto de los flags para que la métrica siga siendo útil.</div>`}
     </div>
 
     <div class="grid g-2">
@@ -631,8 +656,7 @@ function renderDiscipline(v, T){
     (t.flags||[]).forEach(f=>{
       if(f!=='clean' && flagStats[f]){
         flagStats[f].n++;
-        const diff=(t.plannedR||0)-(t.realizedR||0);
-        if(diff>0) flagStats[f].lostR+=diff;
+        flagStats[f].lostR+=tradeErrorCost(t);
       }
     });
   });
@@ -646,7 +670,7 @@ function renderDiscipline(v, T){
     <div class="section-title">Disciplina & errores</div>
     <div class="grid g-3" style="margin-bottom:14px">
       ${statCard('Tasa de disciplina', fmt(dr,1)+'%', `${dc.cleanCount} trades limpios`, dr>=80?'pos':'neg')}
-      ${statCard('Coste total errores', '-'+fmt(dc.lostR,2)+'R', fmt$(-dc.lost$), 'neg')}
+      ${statCard('Coste total errores', fmtR(-dc.lostR||0), fmt$(-dc.lost$||0), dc.lostR>0?'neg':'pos')}
       ${statCard('Racha días limpios', cleanDayStreak(T)+' días', 'sin errores', 'pos')}
     </div>
 
@@ -674,7 +698,7 @@ function renderDiscipline(v, T){
         <tbody>${flagRows.map(([k,s])=>`<tr>
           <td style="font-family:var(--sans);font-weight:600">${FLAG_LABELS[k]}</td>
           <td>${s.n}</td>
-          <td class="neg">-${fmt(s.lostR,2)}R</td>
+          <td class="${s.lostR>0?'neg':s.lostR<0?'pos':''}">${fmtR(-s.lostR||0)}</td>
           <td>${fmt(s.n/T.length*100,0)}%</td>
         </tr>`).join('')}</tbody></table></div>`:`<p class="hint">Ningún error registrado. 🎯</p>`}
     </div>
@@ -682,9 +706,8 @@ function renderDiscipline(v, T){
     ${(()=>{
       const withPlan=T.filter(t=>t.planChecked!=null);
       if(withPlan.length<3) return '';
-      const planLen=t=>planChecklist(t.entryType).length;
-      const full=withPlan.filter(t=>(t.planChecked||[]).length===planLen(t));
-      const partial=withPlan.filter(t=>(t.planChecked||[]).length<planLen(t));
+      const full=withPlan.filter(t=>planComplete(t));
+      const partial=withPlan.filter(t=>!planComplete(t));
       if(!full.length||!partial.length) return '';
       const diff=expectancy(full)-expectancy(partial);
       return `<div class="card" style="margin-top:14px">
@@ -701,7 +724,7 @@ function renderDiscipline(v, T){
             <div class="hint" style="margin-top:6px">WR ${fmt(winrate(partial),0)}%</div>
           </div>
         </div>
-        ${diff>0?`<div class="insight warn" style="margin-top:14px">Cuando cumples todas las reglas de tu plan ganas <b>${fmtR(diff)} más</b> por trade que cuando te saltas alguna. Tu plan funciona — respétalo.</div>`:`<div class="insight" style="margin-top:14px">Aún no hay diferencia clara entre cumplir todo el plan o no. Sigue registrando para que el dato sea fiable.</div>`}
+        ${diff>=0.2&&full.length>=10&&partial.length>=10?`<div class="insight warn" style="margin-top:14px">Cuando cumples todas las reglas de tu plan ganas <b>${fmtR(diff)} más</b> por trade que cuando te saltas alguna. Tu plan funciona — respétalo.</div>`:diff>0?`<div class="insight" style="margin-top:14px">Cumpliendo todo el plan vas <b>${fmtR(diff)}</b> por trade mejor, pero la diferencia es pequeña o hay pocos trades (${full.length} completos): todavía no demuestra nada. Sigue registrando.</div>`:`<div class="insight" style="margin-top:14px">Aún no hay diferencia clara entre cumplir todo el plan o no. Sigue registrando para que el dato sea fiable.</div>`}
       </div>`;
     })()}
   `;
@@ -802,7 +825,7 @@ function renderPerformance(v, T){
         <div class="grid g-2" style="gap:10px;margin-bottom:14px">
           <div class="calc-out" style="border-color:var(--green-dim)">
             <div class="label" style="font-size:11px;color:var(--green);font-weight:600;margin-bottom:6px">R:R ÓPTIMO 👑</div>
-            <div class="big pos">1:${fmt(o.best.tp,1).replace('.0','')}</div>
+            <div class="big pos">1:${fmtTP(o.best.tp)}</div>
             <div class="hint" style="margin-top:6px">Exp ${fmtR(o.best.exp)} · alcanzado ${fmt(o.best.wr,0)}% de las veces</div>
           </div>
           <div class="calc-out">
@@ -816,11 +839,11 @@ function renderPerformance(v, T){
         ${(()=>{
           if(o.avgDol==null) return `<div class="insight" style="margin-top:12px">Registra "DOL en R" en tus trades (a cuántos R está tu DOL) para ver si tu R:R óptimo cae antes, en, o después de tu DOL.</div>`;
           const diff=o.best.tp-o.avgDol;
-          if(Math.abs(diff)<=0.25) return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) coincide casi con tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). <b>Tu estructura es correcta</b>: el DOL es exactamente donde más rentabilidad sacas.</div>`;
-          if(diff<0) return `<div class="insight warn" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) cae <b>antes</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). El precio no siempre llega al DOL, así que cerrar un poco antes te daría más rentabilidad a la larga. Plantéate asegurar antes del DOL.</div>`;
-          return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmt(o.best.tp,1).replace('.0','')}) cae <b>más allá</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). Cuando el precio pasa del DOL suele seguir bastante — pero ojo, quizá son pocos casos. Míralo con cuidado.</div>`;
+          if(Math.abs(diff)<=0.25) return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmtTP(o.best.tp)}) coincide casi con tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). <b>Tu estructura es correcta</b>: el DOL es exactamente donde más rentabilidad sacas.</div>`;
+          if(diff<0) return `<div class="insight warn" style="margin-top:12px">Tu R:R óptimo (1:${fmtTP(o.best.tp)}) cae <b>antes</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). El precio no siempre llega al DOL, así que cerrar un poco antes te daría más rentabilidad a la larga. Plantéate asegurar antes del DOL.</div>`;
+          return `<div class="insight" style="margin-top:12px">Tu R:R óptimo (1:${fmtTP(o.best.tp)}) cae <b>más allá</b> de tu DOL medio (1:${fmt(o.avgDol,1).replace('.0','')}). Cuando el precio pasa del DOL suele seguir bastante — pero ojo, quizá son pocos casos. Míralo con cuidado.</div>`;
         })()}
-        <div class="hint" style="margin-top:8px">Basado en ${o.n} trades con MFE. Asume tu SL fijo de -1R. Un TP solo cuenta como alcanzado si tu MFE llegó a ese nivel.</div>
+        <div class="hint" style="margin-top:8px">Basado en ${o.n} trades con MFE. Para cada TP: si tu MFE llegó → +TP; si no llegó y el precio tocó el SL (stop o MAE ≥ 1R) → -1R; si no llegó a ninguno de los dos (BE, cierre manual) → 0R.</div>
         `;
       })()}
     </div>
@@ -830,37 +853,36 @@ function renderPerformance(v, T){
         const manual=T.filter(t=>t.exitType==='manual');
         if(manual.length<2) return `<p class="hint">Llevas ${manual.length} cierre(s) manual(es). Con 2 o más te muestro el análisis. Marca el flag correspondiente (miedo, FOMO...) si el cierre no siguió tu plan, y registra el MFE.</p>`;
 
-        const manualWins=manual.filter(t=>t.result==='win');
+        // Todos los cierres manuales que no acabaron en stop (ganadores Y cerrados a 0R)
+        const manualWins=manual.filter(t=>(t.realizedR||0)>=0);
         const withMfe=manualWins.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
 
         // El FLAG manda: tú decides si el cierre fue limpio o un error.
         // clean = seguiste tu plan (decisión buena, la respetamos)
         // dirty = marcaste algún error (miedo, FOMO...) -> ahí sí analizamos el coste
         let cleanCount=0, cleanReachedTP=0;   // limpios (info neutra)
-        let errCount=0, errCostR=0, errReachedTP=0;  // con error marcado
+        let errCount=0, errCostR=0, errCost$=0, errReachedTP=0;  // con error marcado
         withMfe.forEach(t=>{
           const hasError=(t.flags||[]).some(f=>f!=='clean');
           const reachedTP = t.mfe >= (t.plannedR||0);
           const leftR = Math.max(0,(t.plannedR||0)-(t.realizedR||0));
           if(hasError){
             errCount++;
-            if(reachedTP){ errReachedTP++; errCostR+=leftR; }
+            if(reachedTP){ errReachedTP++; errCostR+=leftR; errCost$+=leftR*(t.riskUSD||0); }
           } else {
             cleanCount++;
             if(reachedTP) cleanReachedTP++;
           }
         });
-        const risk=manual[0].riskUSD||200;
-
         return `
         <div class="grid g-3" style="gap:10px">
           <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">CIERRES LIMPIOS</div><div class="big pos">${cleanCount}</div><div class="hint" style="margin-top:4px">seguiste tu plan</div></div>
           <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CON ERROR MARCADO</div><div class="big ${errCount?'neg':''}">${errCount}</div><div class="hint" style="margin-top:4px">miedo, FOMO...</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R PERDIDO (errores)</div><div class="big ${errCostR>0?'neg':''}">${errCostR>0?'-'+fmt(errCostR,1)+'R':'—'}</div><div class="hint" style="margin-top:4px">${errCostR>0?fmt$(errCostR*risk):'ninguno'}</div></div>
+          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R PERDIDO (errores)</div><div class="big ${errCostR>0?'neg':''}">${errCostR>0?'-'+fmt(errCostR,1)+'R':'—'}</div><div class="hint" style="margin-top:4px">${errCostR>0?fmt$(errCost$):'ninguno'}</div></div>
         </div>
         ${!withMfe.length?`<div class="insight" style="margin-top:14px">Registra el <b>MFE</b> en tus cierres manuales para el análisis completo.</div>`:`
           ${cleanCount?`<div class="insight" style="margin-top:14px"><b>${cleanCount} cierre(s) limpio(s).</b> Seguiste tu plan, así que fueron buenas decisiones — el resultado no cambia eso.${cleanReachedTP?` Como dato neutro: en ${cleanReachedTP} de ellos el precio siguió hasta tu TP. No es un error (decidiste bien), pero si ves un patrón, quizá tu plan de salida se pueda afinar.`:` En ninguno el precio siguió hasta tu TP: cerraste justo a tiempo.`}</div>`:''}
-          ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCostR*risk)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
+          ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCost$)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
         `}
         `;
       })()}
@@ -868,7 +890,8 @@ function renderPerformance(v, T){
     <div class="card" style="margin-bottom:14px">
       <h3>¿Está tu SL demasiado lejos? (MAE) ${helpIcon("maeanalysis")}</h3>
       ${(()=>{
-        const withMae=T.filter(t=>!isNaN(t.mae)&&t.mae!=null);
+        // MAE siempre en positivo (si se anotó -1 por error, cuenta como 1)
+        const withMae=T.filter(t=>!isNaN(t.mae)&&t.mae!=null).map(t=>({...t,mae:Math.abs(t.mae)}));
         if(withMae.length<5) return `<p class="hint">Registra el MAE (R máximo en contra) en tus trades. Con 5+ te muestro si tu SL está demasiado lejos. Fiable de verdad a partir de 20-30 trades.</p>`;
         const wins=withMae.filter(t=>t.result==='win');
         const losses=withMae.filter(t=>t.result==='loss');
@@ -912,10 +935,10 @@ function renderPerformance(v, T){
         const withMfe=be.filter(t=>!isNaN(t.mfe)&&t.mfe!=null);
         const wouldveTP=withMfe.filter(t=>t.mfe>=(t.plannedR||0));
         const lostR=wouldveTP.reduce((s,t)=>s+(t.plannedR||0),0);
+        const lost$=wouldveTP.reduce((s,t)=>s+(t.plannedR||0)*(t.riskUSD||0),0);
         // cruce: de los que habrían ido a TP, cuántos por impulso vs por plan
         const tpByImpulse=wouldveTP.filter(t=>badFlags(t)).length;
         const tpByPlan=wouldveTP.filter(t=>!badFlags(t)).length;
-        const risk=be[0].riskUSD||200;
         return `
         <div class="grid g-4" style="gap:10px">
           <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TOTAL BE</div><div class="big">${be.length}</div></div>
@@ -924,7 +947,7 @@ function renderPerformance(v, T){
           <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">HABRÍAN IDO A TP</div><div class="big ${wouldveTP.length?'neg':''}">${wouldveTP.length}</div><div class="hint" style="margin-top:4px">${withMfe.length?'de '+withMfe.length+' con MFE':'registra MFE'}</div></div>
         </div>
         ${impulsive.length?`<div class="insight warn" style="margin-top:14px"><b>${impulsive.length} de ${be.length} BE los moviste por impulso</b> (miedo o fuera de plan). Tu regla dice poner BE solo al llegar al primer objetivo — revisa si te estás adelantando.</div>`:`<div class="insight" style="margin-top:14px">Todos tus BE los pusiste siguiendo el plan. 🎯</div>`}
-        ${wouldveTP.length?`<div class="insight bad" style="margin-top:10px"><b>${wouldveTP.length} BE que habrían ido a TP.</b> El precio te sacó en 0R y luego llegó a tu objetivo: dejaste de ganar ${fmt(lostR,1)}R (${fmt$(lostR*risk)}).</div>
+        ${wouldveTP.length?`<div class="insight bad" style="margin-top:10px"><b>${wouldveTP.length} BE que habrían ido a TP.</b> El precio te sacó en 0R y luego llegó a tu objetivo: dejaste de ganar ${fmt(lostR,1)}R (${fmt$(lost$)}).</div>
         <div class="insight ${tpByImpulse>tpByPlan?'bad':'warn'}" style="margin-top:10px"><b>El cruce clave:</b> de esos ${wouldveTP.length} ganadores perdidos, <b>${tpByImpulse} fueron por impulso</b> (miedo) y <b>${tpByPlan} por plan</b>. ${tpByImpulse>tpByPlan
           ? 'La mayoría los perdiste por mover el BE con miedo, no por estrategia. Es un problema de DISCIPLINA: si aguantas tu plan, recuperas esos ganadores.'
           : tpByPlan>tpByImpulse
@@ -1136,12 +1159,17 @@ function renderROI(v, T){
   // Embudo por estado de cuenta
   const byStatus=s=>accts.filter(a=>(a.status||'en_curso')===s).length;
   const nEval = accts.length; // total cuentas registradas
-  const nPassed = accts.filter(a=>['pasada','fondeada','payout'].includes(a.status)).length;
-  const nFunded = accts.filter(a=>['fondeada','payout'].includes(a.status)).length;
+  // Una cuenta que llegó a fondeada CUENTA COMO PASADA aunque después se quemara
+  // (antes, al marcarla "perdida", desaparecía de las aprobadas).
+  const reachedFunded = a => a.phase==='Funded' || ['fondeada','payout'].includes(a.status);
+  const nPassed = accts.filter(a=>a.status==='pasada' || reachedFunded(a)).length;
+  const nFunded = accts.filter(reachedFunded).length;
   const nPayout = byStatus('payout');
   const nLost = byStatus('perdida');
   const nInProgress = byStatus('en_curso');
-  const passRate = nEval>0? nPassed/nEval*100 : 0;
+  // % aprobación sobre evaluaciones YA TERMINADAS (las que siguen en curso aún no han pasado ni fallado)
+  const nEvalDone = accts.filter(a=>(a.status||'en_curso')!=='en_curso' || reachedFunded(a)).length;
+  const passRate = nEvalDone>0? nPassed/nEvalDone*100 : 0;
   const payoutConv = nFunded>0? nPayout/nFunded*100 : 0;
   const avgPayout = payouts.length? totalCollected/payouts.length : 0;
 
@@ -1171,7 +1199,7 @@ function renderROI(v, T){
       <h3>Estadística de cuentas ${helpIcon("funnel")}</h3>
       <div class="grid g-4" style="gap:10px">
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CUENTAS</div><div class="big">${nEval}</div><div class="hint" style="margin-top:4px">${nInProgress} en curso</div></div>
-        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PASADAS</div><div class="big">${nPassed}</div><div class="hint" style="margin-top:4px">${fmt(passRate,0)}% aprobación</div></div>
+        <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PASADAS</div><div class="big">${nPassed}</div><div class="hint" style="margin-top:4px">${fmt(passRate,0)}% aprobación (de ${nEvalDone} terminadas)</div></div>
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">CON PAYOUT</div><div class="big pos">${nPayout}</div><div class="hint" style="margin-top:4px">${fmt(payoutConv,0)}% de las fondeadas</div></div>
         <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">PERDIDAS</div><div class="big ${nLost?'neg':''}">${nLost}</div></div>
       </div>
@@ -1309,8 +1337,8 @@ function renderROI(v, T){
           <div class="bar-track"><div class="bar-fill" style="width:${ddPct}%;background:${ddPct>40?'var(--green)':ddPct>20?'var(--amber)':'var(--red)'}"></div></div>
         </div>
 
-        ${consLimit?`<div class="insight ${consistencyOK?'':'warn'}" style="margin:0 0 10px">Consistency: tu mayor día es <b>${fmt(consistency,0)}%</b> del profit (límite ${consLimit}%). ${consistencyOK?'Dentro ✓':'⚠ Reparte más el profit entre días.'}</div>`:''}
-        ${dll&&worstDay<=-dll?`<div class="insight bad" style="margin:0 0 10px">⚠ Tu peor día (${fmt$(worstDay)}) superó el daily loss limit de ${fmt$(dll)}.</div>`:''}
+        ${consLimit&&realized>0&&!dead?`<div class="insight ${consistencyOK?'':'warn'}" style="margin:0 0 10px">Consistency: tu mayor día es <b>${fmt(consistency,0)}%</b> del profit (límite ${consLimit}%). ${consistencyOK?'Dentro ✓':'⚠ Reparte más el profit entre días.'}</div>`:''}
+        ${dll&&worstDay<=-dll?`<div class="insight bad" style="margin:0 0 10px">⚠ Tu peor día (${fmt$(worstDay)}) ${worstDay<-dll?'superó':'alcanzó'} el daily loss limit de ${fmt$(dll)}.</div>`:''}
 
         <div class="insight ${dead?'bad':ddPct<25?'warn':''}" style="margin-top:4px">💡 ${advice}</div>
       </div>`;
@@ -1745,6 +1773,17 @@ function autoSetup(checkedCount, total){
   if(fails===1) return 'A';
   if(fails===2) return 'B';
   return 'C';
+}
+// ¿El trade cumplió TODO su plan? Se mide contra la checklist que había CUANDO se registró,
+// no contra la actual (si no, añadir reglas nuevas "estropearía" los trades antiguos).
+//  · Trades nuevos guardan planTotal (nº de reglas en ese momento).
+//  · Trades con tipo de entrada pero sin planTotal → su setup guardado (A+ = todas cumplidas).
+//  · Trades muy antiguos (checklist original de 8 reglas) → 8 o más marcadas.
+function planComplete(t){
+  const n=(t.planChecked||[]).length;
+  if(t.planTotal) return n>=t.planTotal;
+  if(t.entryType) return t.setup==='Setup A+';
+  return n>=8;
 }
 // Compat: PLAN_CHECKLIST apunta a manipulación (para código antiguo)
 const PLAN_CHECKLIST=PLAN_MANIPULACION;
@@ -2218,6 +2257,10 @@ function saveTrade(id){
   const flags=$('#modalBg')._flags;
   const realizedR=parseFloat($('#f_realizedR').value);
   const existing=id?DB.trades.find(x=>x.id===id):null;
+  const newChecked=$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan);
+  const newEntryType=$('#f_entryType')?.value||'manipulacion';
+  // Si editas un trade antiguo sin tocar su checklist, conserva su nº de reglas original.
+  const checklistUntouched = existing && JSON.stringify(existing.planChecked||[])===JSON.stringify(newChecked) && (existing.entryType||'manipulacion')===newEntryType;
   const t={
     id:id||uid(),
     date:$('#f_date').value,
@@ -2245,8 +2288,9 @@ function saveTrade(id){
     flags:[...flags],
     note:$('#f_note').value.trim(),
     images:[...($('#modalBg')._images||[])],
-    planChecked:$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan),
-    entryType:$('#f_entryType')?.value||'manipulacion'
+    planChecked:newChecked,
+    entryType:newEntryType,
+    planTotal: checklistUntouched ? existing.planTotal : planChecklist(newEntryType).length
   };
   if(id){ const i=DB.trades.findIndex(x=>x.id===id); DB.trades[i]=t; }
   else DB.trades.push(t);
@@ -2663,7 +2707,7 @@ function buildAIReport(){
     if(t.account) parts.push('cuenta:'+t.account);
     const ph=tradePhase(t); if(ph) parts.push('fase:'+(ph==='funded'?'FUNDED':'EVAL'));
     if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
-    if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+t.mae+'R');
+    if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+Math.abs(t.mae)+'R');
     if(t.dolReached) parts.push('DOL:'+t.dolReached);
     if(!isNaN(t.dolR)&&t.dolR!=null) parts.push('DOL@'+t.dolR+'R');
     if(t.moveType) parts.push('mov:'+(MOVE_TYPES[t.moveType]||t.moveType)+(t.moveOther?' ('+t.moveOther+')':''));
@@ -2691,8 +2735,9 @@ function buildAIReport(){
     const spent=costs.reduce((s,c)=>s+(c.amount||0),0);
     const collected=payouts.reduce((s,p)=>s+(p.amount||0),0);
     const accts=DB.accounts||[];
-    const nPassed=accts.filter(a=>['pasada','fondeada','payout'].includes(a.status)).length;
-    const nFunded=accts.filter(a=>['fondeada','payout'].includes(a.status)).length;
+    const reachedFunded=a=>a.phase==='Funded'||['fondeada','payout'].includes(a.status);
+    const nPassed=accts.filter(a=>a.status==='pasada'||reachedFunded(a)).length;
+    const nFunded=accts.filter(reachedFunded).length;
     const nPayout=accts.filter(a=>a.status==='payout').length;
     L.push('--- ROI DE PROPS ---');
     L.push(`Gastado en cuentas: ${fmt$(spent)} (${costs.length} costes) | Cobrado en payouts: ${fmt$(collected)} (${payouts.length} payouts)`);
