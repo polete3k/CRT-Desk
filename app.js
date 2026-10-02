@@ -227,6 +227,8 @@ document.addEventListener('click',e=>{
 
 // Filtro global de fase: 'all' | 'eval' | 'funded'
 let PHASE_FILTER = 'all';
+let MONTH_FILTER = 'all'; // 'all' o 'AAAA-MM' (compartido entre Disciplina y Rendimiento)
+const MONTH_TABS = ['discipline','performance'];
 
 // Resuelve la fase de un trade a partir de la cuenta asignada
 function tradePhase(t){
@@ -482,13 +484,22 @@ function destroyCharts(){ Object.values(charts).forEach(c=>{try{c.destroy()}catc
 function render(){
   destroyCharts();
   const v = $('#view');
-  const T = tradesFiltered();
+  let T = tradesFiltered();
   // pestañas donde el filtro eval/funded tiene sentido
   const metricTabs=['overview','discipline','performance'];
   const showFilter = metricTabs.includes(CURRENT_TAB);
+  // filtro por mes (solo Disciplina y Rendimiento)
+  const showMonth = MONTH_TABS.includes(CURRENT_TAB);
+  if(showMonth && MONTH_FILTER!=='all') T = T.filter(t=>(t.date||'').startsWith(MONTH_FILTER));
+  const filterBars = () => showFilter
+    ? `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start">${phaseFilterBar()}${showMonth?monthFilterBar():''}</div>`
+    : '';
   const hasNoTrade=(DB.noTradeDays||[]).length>0;
   if(CURRENT_TAB!=='roi' && !T.length && !(CURRENT_TAB==='calendar'&&hasNoTrade)){
-    v.innerHTML = (showFilter?phaseFilterBar():'') + emptyState();
+    // Hay trades pero ninguno con este filtro (mes / Eval-Funded): no mostrar "aún no hay trades"
+    v.innerHTML = filterBars() + (DB.trades.length && showFilter
+      ? `<div class="empty"><div class="ico">◴</div><p class="hint">No hay trades con este filtro. Cambia el mes o Eval/Funded.</p></div>`
+      : emptyState());
     return;
   }
   ({
@@ -501,7 +512,7 @@ function render(){
   })[CURRENT_TAB](v, T);
   // prepend filter bar en pestañas de métricas
   if(showFilter){
-    v.insertAdjacentHTML('afterbegin', phaseFilterBar());
+    v.insertAdjacentHTML('afterbegin', filterBars());
   }
 }
 
@@ -515,6 +526,22 @@ function phaseFilterBar(){
   </div>`;
 }
 function setPhaseFilter(p){ PHASE_FILTER=p; render(); }
+
+// Selector de mes (Disciplina y Rendimiento). Los meses salen de tus trades (respetando el filtro Eval/Funded).
+const MONTH_NAMES_SHORT=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+function monthLabel(ym){ const [y,m]=ym.split('-'); return MONTH_NAMES_SHORT[+m-1]+' '+y.slice(2); }
+function monthFilterBar(){
+  const base=tradesFiltered();
+  const counts={};
+  base.forEach(t=>{ const ym=(t.date||'').slice(0,7); if(ym) counts[ym]=(counts[ym]||0)+1; });
+  if(MONTH_FILTER!=='all' && !counts[MONTH_FILTER]) counts[MONTH_FILTER]=0; // mantener visible el mes elegido
+  const months=Object.keys(counts).sort();
+  return `<div class="phase-filter" style="flex-wrap:wrap">
+    <button class="phase-btn ${MONTH_FILTER==='all'?'active':''}" onclick="setMonthFilter('all')">Todos los meses <span class="pf-count">${base.length}</span></button>
+    ${months.map(ym=>`<button class="phase-btn ${MONTH_FILTER===ym?'active':''}" onclick="setMonthFilter('${ym}')">${monthLabel(ym)} <span class="pf-count">${counts[ym]}</span></button>`).join('')}
+  </div>`;
+}
+function setMonthFilter(m){ MONTH_FILTER=m; render(); }
 
 function emptyState(){
   return `<div class="empty">
@@ -773,46 +800,6 @@ function renderPerformance(v, T){
           </tr>`).join('')}</tbody>
         </table></div>
         ${rows.length>=2?`<div class="insight" style="margin-top:12px">Tu mejor estructura es <b>${best.label}</b> (${fmtR(best.exp)} de expectancy sobre ${best.n} trades). Si la diferencia es grande y tienes datos suficientes, prioriza operar esa estructura y sé más selectivo con las otras.</div>`:`<div class="insight" style="margin-top:12px">Solo tienes datos de una estructura por ahora. Registra más para poder comparar.</div>`}
-        `;
-      })()}
-    </div>
-    <div class="card" style="margin-bottom:14px">
-      <h3>RS Scalp — entradas por SMT ${helpIcon("smt")}</h3>
-      ${(()=>{
-        const smt=T.filter(t=>t.smt==='yes' && t.smtResult);
-        if(smt.length<3) return `<p class="hint">Marca "¿Hubo entrada por SMT?" en tus trades. Con 3+ te muestro cómo funciona esta subestrategia: cuántas van a TP y si el timing respecto a la apertura influye.</p>`;
-        const tp=smt.filter(t=>t.smtResult==='tp').length;
-        const sl=smt.filter(t=>t.smtResult==='sl').length;
-        const be=smt.filter(t=>t.smtResult==='be').length;
-        const wr=smt.length?tp/smt.length*100:0;
-        // por timing
-        const TIMING={before:'Antes apertura (<9:30)',open:'En apertura (9:30-10)',after:'Después (>10:00)'};
-        const byTiming=Object.keys(TIMING).map(k=>{
-          const ts=smt.filter(t=>t.smtTiming===k);
-          const t_tp=ts.filter(t=>t.smtResult==='tp').length;
-          return { key:k, label:TIMING[k], n:ts.length, tp:t_tp, wr:ts.length?t_tp/ts.length*100:0 };
-        }).filter(r=>r.n>0).sort((a,b)=>b.wr-a.wr);
-        return `
-        <div class="grid g-4" style="gap:10px">
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TOTAL SMT</div><div class="big">${smt.length}</div></div>
-          <div class="calc-out" style="border-color:var(--green-dim)"><div class="label" style="font-size:10px;color:var(--green);font-weight:600">% A TP</div><div class="big ${wr>=50?'pos':'neg'}">${fmt(wr,0)}%</div><div class="hint" style="margin-top:4px">${tp}/${smt.length}</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">A SL</div><div class="big neg">${sl}</div></div>
-          <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">BE</div><div class="big">${be}</div></div>
-        </div>
-        ${byTiming.length?`
-        <div class="table-wrap" style="border:none;margin-top:14px"><table style="min-width:auto">
-          <thead><tr><th>Timing</th><th>N</th><th>A TP</th><th>% acierto</th></tr></thead>
-          <tbody>${byTiming.map(r=>`<tr>
-            <td style="font-family:var(--sans);font-weight:600">${r.label}</td>
-            <td>${r.n}</td>
-            <td>${r.tp}</td>
-            <td class="${r.wr>=50?'pos':'neg'}">${fmt(r.wr,0)}%</td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-        <div class="insight ${wr>=50?'':'warn'}" style="margin-top:12px">
-          Los SMT van a TP el <b>${fmt(wr,0)}%</b> de las veces (${smt.length} señales). ${byTiming.length>=2?`Tu mejor timing es <b>${byTiming[0].label}</b> (${fmt(byTiming[0].wr,0)}% acierto). ${byTiming[0].wr-byTiming[byTiming.length-1].wr>=25?'La diferencia entre timings es notable — prioriza el mejor.':'Los timings rinden parecido de momento.'}`:''}
-          ${smt.length<15?' ⚠ Aún pocos datos: no saques conclusiones firmes hasta 15-20 señales.':''}
-        </div>`:''}
         `;
       })()}
     </div>
@@ -1741,7 +1728,7 @@ const FLAG_LABELS={
 const PLAN_MANIPULACION=[
   'Tener el DOL claro e ir solo a favor del DOL (Innegociable)',
   'SL donde se invalide el trade',
-  'Tener rangos LTF (8h-2h) a favor',
+  'Tener rangos LTF (12h-1h) a favor',
   'No tener rangos importantes en contra (12h o más)',
   'Tendencia a favor',
   '1 SL por cuenta por día',
@@ -1762,9 +1749,26 @@ const PLAN_CONTINUACION=[
   'A un trade de fondear: solo setup A+',
   'Solo se opera desde el ordenador, con el gráfico completo delante y el checklist leído. Desde el móvil no se abre nunca una posición'
 ];
+// Manipulación LTF: igual que manipulación pero en temporalidades bajas
+const PLAN_MANIPULACION_LTF=[
+  'Tener el DOL claro e ir solo a favor del DOL (Innegociable)',
+  'SL donde se invalide el trade',
+  'Tener rangos LTF (M15 o más) a favor',
+  'No tener rangos importantes en contra (1h o más)',
+  'Tendencia a favor',
+  '1 SL por cuenta por día',
+  'Poner BE si el par o el correlacionado llega al menos al primer objetivo',
+  'Solo puedo cerrar antes si el par correlacionado ha llegado al objetivo',
+  'Cerré plataforma',
+  'A un trade de fondear: solo setup A+',
+  'Solo se opera desde el ordenador, con el gráfico completo delante y el checklist leído. Desde el móvil no se abre nunca una posición'
+];
+const ENTRY_TYPE_LABELS={manipulacion:'Manipulación',manipulacion_ltf:'Manipulación LTF',continuacion:'Continuación'};
 // Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible)
 function planChecklist(entryType){
-  return entryType==='continuacion' ? PLAN_CONTINUACION : PLAN_MANIPULACION;
+  if(entryType==='continuacion') return PLAN_CONTINUACION;
+  if(entryType==='manipulacion_ltf') return PLAN_MANIPULACION_LTF;
+  return PLAN_MANIPULACION;
 }
 // Calcula el setup automático según fallos: 0=A+, 1=A, 2=B, 3+=C
 function autoSetup(checkedCount, total){
@@ -1922,6 +1926,7 @@ function tradeModal(t){
     <div class="field"><label>Tipo de entrada</label>
       <select id="f_entryType" onchange="rebuildChecklist()">
         <option value="manipulacion" ${(e.entryType||'manipulacion')==='manipulacion'?'selected':''}>Manipulación</option>
+        <option value="manipulacion_ltf" ${e.entryType==='manipulacion_ltf'?'selected':''}>Manipulación LTF</option>
         <option value="continuacion" ${e.entryType==='continuacion'?'selected':''}>Continuación</option>
       </select>
     </div>
@@ -1944,30 +1949,6 @@ function tradeModal(t){
         ${Object.entries(MOVE_TYPES).map(([k,l])=>`<option value="${k}" ${e.moveType===k?'selected':''}>${l}</option>`).join('')}
       </select>
       <input type="text" id="f_moveOther" placeholder="Especifica qué momento..." value="${e.moveOther||''}" style="margin-top:8px;display:none">
-    </div>
-    <div class="field"><label>¿Hubo entrada por SMT? <span class="hint">RS Scalp — si apareció el señal, entraras o no</span></label>
-      <select id="f_smt" onchange="toggleSmt()">
-        <option value="" ${!e.smt?'selected':''}>— no hubo / no registrado —</option>
-        <option value="yes" ${e.smt==='yes'?'selected':''}>Sí, apareció entrada por SMT</option>
-      </select>
-    </div>
-    <div id="f_smtDetails" style="display:none">
-      <div class="field-row">
-        <div class="field"><label>Resultado del SMT</label>
-          <select id="f_smtResult">
-            <option value="tp" ${e.smtResult==='tp'?'selected':''}>TP (habría ganado)</option>
-            <option value="sl" ${e.smtResult==='sl'?'selected':''}>SL (habría perdido)</option>
-            <option value="be" ${e.smtResult==='be'?'selected':''}>BE</option>
-          </select>
-        </div>
-        <div class="field"><label>Timing respecto apertura NY</label>
-          <select id="f_smtTiming">
-            <option value="before" ${e.smtTiming==='before'?'selected':''}>Antes de apertura (&lt;9:30)</option>
-            <option value="open" ${e.smtTiming==='open'?'selected':''}>En apertura (9:30-10:00)</option>
-            <option value="after" ${e.smtTiming==='after'?'selected':''}>Después (&gt;10:00)</option>
-          </select>
-        </div>
-      </div>
     </div>
     <div class="field-row">
       <div class="field"><label>Cuenta</label><select id="f_account" onchange="onAccountChange()"><option value="">— sin asignar —</option>${DB.accounts.filter(a=>a.status!=='perdida' || e.account===a.name).map(a=>{
@@ -2052,7 +2033,6 @@ function tradeModal(t){
   rebuildChecklist(true);
   onRealizedRChange();
   toggleMoveOther();
-  toggleSmt();
 }
 
 // (Re)dibuja la checklist según el tipo de entrada y engancha el conteo + setup automático.
@@ -2269,9 +2249,10 @@ function saveTrade(id){
     session:$('#f_session').value,
     moveType:$('#f_moveType').value,
     moveOther:$('#f_moveType').value==='other'?$('#f_moveOther').value.trim():'',
-    smt:$('#f_smt').value,
-    smtResult:$('#f_smt').value==='yes'?$('#f_smtResult').value:'',
-    smtTiming:$('#f_smt').value==='yes'?$('#f_smtTiming').value:'',
+    // SMT ya no se pregunta; se conservan los datos de trades antiguos
+    smt:existing?.smt||'',
+    smtResult:existing?.smtResult||'',
+    smtTiming:existing?.smtTiming||'',
     account:$('#f_account').value,
     phase: $('#f_phase').value || (()=>{ const acc=DB.accounts.find(a=>a.name===$('#f_account').value); return acc? (acc.phase==='Funded'?'funded':'eval') : ''; })(),
     plannedR:parseFloat($('#f_plannedR').value)||0,
