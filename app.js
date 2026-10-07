@@ -1355,17 +1355,32 @@ function setupScore(setup){
   const s=setup.replace('Setup ','').trim();
   return s==='A+'?4:s==='A'?3:s==='B'?2:s==='C'?1:null;
 }
-// Media de setups de un día → {score, label, color, chipBg, chipFg} para la vista disciplina.
-// Días con trades sin setup asignado → gris (score null). Colores inline (no dependen del index.html).
-function dayDisciplina(trades){
-  const scores=trades.map(t=>setupScore(t.setup)).filter(s=>s!=null);
-  if(!scores.length) return {score:null,label:'SIN SETUP',border:'var(--line)',bg:'transparent',chipBg:'rgba(138,151,168,.16)',chipFg:'var(--ink-faint)'};
-  const avg=scores.reduce((a,b)=>a+b,0)/scores.length;
-  // puntos de corte: A+ (≥3.5) verde fuerte, A (2.5–3.5) verde suave, B (1.5–2.5) amarillo, C (<1.5) rojo
+// Puntuación de disciplina de UN trade: si tiene cualquier flag de error (miedo, FOMO...) cuenta como C,
+// aunque el checklist diera A+. Si está limpio, manda su setup.
+function tradeDiscScore(t){
+  if((t.flags||[]).some(f=>f!=='clean')) return 1;
+  return setupScore(t.setup);
+}
+const DISC_GREY={score:null,border:'var(--line)',bg:'transparent',chipBg:'rgba(138,151,168,.16)',chipFg:'var(--ink-faint)'};
+// Colores de la vista disciplina según la nota media (inline, no dependen del index.html).
+// Cortes: A+ (≥3.5) verde fuerte, A (2.5–3.5) verde suave, B (1.5–2.5) amarillo, C (<1.5) rojo
+function discStyle(avg){
   if(avg>=3.5) return {score:avg,label:'A+',border:'#3ddc84',bg:'rgba(61,220,132,.18)',chipBg:'rgba(61,220,132,.28)',chipFg:'#3ddc84'};
   if(avg>=2.5) return {score:avg,label:'A', border:'rgba(61,220,132,.5)',bg:'rgba(61,220,132,.09)',chipBg:'rgba(61,220,132,.18)',chipFg:'#3ddc84'};
   if(avg>=1.5) return {score:avg,label:'B', border:'rgba(224,176,64,.6)',bg:'rgba(224,176,64,.1)',chipBg:'rgba(224,176,64,.2)',chipFg:'#e0b040'};
   return {score:avg,label:'C', border:'rgba(255,90,90,.6)',bg:'rgba(255,90,90,.1)',chipBg:'rgba(255,90,90,.2)',chipFg:'#ff6b6b'};
+}
+// Nota media de un día con trades. Sin setup ni flags → gris (no cuenta).
+function dayDisciplina(trades){
+  const scores=trades.map(tradeDiscScore).filter(s=>s!=null);
+  if(!scores.length) return {...DISC_GREY,label:'SIN SETUP'};
+  return discStyle(scores.reduce((a,b)=>a+b,0)/scores.length);
+}
+// Día sin operar: verde fuerte si seguiste el plan, rojo si no, gris si no está marcado.
+function noTradeDisciplina(nt){
+  if(nt.planFollowed==='yes') return {...discStyle(4),label:'PLAN ✓'};
+  if(nt.planFollowed==='no')  return {...discStyle(1),label:'PLAN ✗'};
+  return {...DISC_GREY,label:'SIN MARCAR'};
 }
 
 function renderCalendar(v, T){
@@ -1439,6 +1454,13 @@ function renderCalendar(v, T){
           <div class="meta">${d.n} trade${d.n>1?'s':''} · ${fmtR(d.r)}</div>
         </div>`;
       }
+    } else if(noday && CAL_VIEW==='disciplina'){
+      const disc=noTradeDisciplina(noday);
+      cells+=`<div class="cal-cell clickable ${isToday?'today':''}" style="border-color:${disc.border};background:${disc.bg}" onclick="editNoTrade('${noday.id}')" title="${NOTRADE_REASONS[noday.reason]||''}">
+        <div class="daynum">${day}</div>
+        <div class="cal-chips"><span class="cal-chip" style="background:${disc.chipBg};color:${disc.chipFg}">${disc.label}</span><span class="cal-chip rest">SIN OPERAR</span></div>
+        <div class="meta nt-reason">${NOTRADE_REASONS[noday.reason]||''}</div>
+      </div>`;
     } else if(noday){
       cells+=`<div class="cal-cell notrade clickable ${isToday?'today':''}" onclick="editNoTrade('${noday.id}')" title="${NOTRADE_REASONS[noday.reason]||''}">
         <div class="daynum">${day}</div>
@@ -1456,7 +1478,16 @@ function renderCalendar(v, T){
   }
 
   // stats de disciplina del mes
-  const discDays=monthDays.map(d=>dayDisciplina(d.trades)).filter(x=>x.score!=null);
+  const tradeDisc=monthDays.map(d=>dayDisciplina(d.trades)).filter(x=>x.score!=null);
+  // días sin operar del mes (sin trades ese día) que tienen marcado si seguiste el plan
+  const noDayDisc=(DB.noTradeDays||[]).filter(n=>{
+    if((n.type||'noday')!=='noday') return false;
+    const [yy,mm,dd]=n.date.split('-').map(Number);
+    return yy===CAL_YEAR && (mm-1)===CAL_MONTH && !byDay[dd];
+  }).map(noTradeDisciplina);
+  const noDayMarked=noDayDisc.filter(x=>x.score!=null);
+  const noDayUnmarked=noDayDisc.length-noDayMarked.length;
+  const discDays=[...tradeDisc,...noDayMarked];
   const discAvg=discDays.length?discDays.reduce((s,x)=>s+x.score,0)/discDays.length:null;
   const discLabel=discAvg==null?'—':discAvg>=3.5?'A+':discAvg>=2.5?'A':discAvg>=1.5?'B':'C';
 
@@ -1465,7 +1496,7 @@ function renderCalendar(v, T){
       <button class="phase-btn ${CAL_VIEW==='pnl'?'active':''}" onclick="calSetView('pnl')">💶 PnL</button>
       <button class="phase-btn ${CAL_VIEW==='disciplina'?'active':''}" onclick="calSetView('disciplina')">🎯 Disciplina</button>
     </div>
-    ${CAL_VIEW==='disciplina'?`<div class="insight" style="margin-bottom:14px">Aquí no importa el dinero, sino si seguiste tu plan. Cada día se colorea por la calidad media de tus setups: <b>A+</b> verde fuerte, <b>A</b> verde, <b>B</b> amarillo, <b>C</b> rojo. Lo importante es acumular días verdes de disciplina, pase lo que pase con el PnL.</div>`:''}
+    ${CAL_VIEW==='disciplina'?`<div class="insight" style="margin-bottom:14px">Aquí no importa el dinero, sino si seguiste tu plan. Cada día se colorea por la calidad media de tus trades: <b>A+</b> verde fuerte, <b>A</b> verde, <b>B</b> amarillo, <b>C</b> rojo. Un trade con cualquier flag de error (miedo, FOMO...) cuenta como <b>C</b>. Los días sin operar salen en verde si seguiste tu plan y en rojo si no (gris si no lo has marcado). Lo importante es acumular días verdes de disciplina, pase lo que pase con el PnL.</div>`:''}
     <div class="cal-head">
       <button class="btn ghost sm icon" onclick="calShift(-1)">←</button>
       <div class="month">${monthName}</div>
@@ -1482,6 +1513,7 @@ function renderCalendar(v, T){
       <div class="s"><span class="k">Días B</span><span class="v" style="color:var(--amber)">${discDays.filter(x=>x.score>=1.5&&x.score<2.5).length}</span></div>
       <div class="s"><span class="k">Días C</span><span class="v neg">${discDays.filter(x=>x.score<1.5).length}</span></div>
       <div class="s"><span class="k">Días operados</span><span class="v">${monthDays.length}</span></div>
+      ${noDayDisc.length?`<div class="s"><span class="k">Sin operar con plan ✓</span><span class="v pos">${noDayMarked.filter(x=>x.score>=3.5).length}${noDayUnmarked?` <span style="font-size:11px;color:var(--ink-faint)">(${noDayUnmarked} sin marcar)</span>`:''}</span></div>`:''}
       `:`
       <div class="s"><span class="k">P&L del mes</span><span class="v ${cls(monthPnl)}">${fmt$(monthPnl)}</span></div>
       <div class="s"><span class="k">Días verdes</span><span class="v pos">${greenDays}</span></div>
@@ -1823,6 +1855,12 @@ function openNoTradeModal(existing){
         </select>
       </div>
     </div>
+    <div class="field" id="nt_planWrap"><label>¿Has seguido tu plan? <span class="hint">cuenta para el calendario de disciplina</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <label class="plan-item" style="flex:1;min-width:150px;margin:0;border:1px solid var(--line);border-radius:9px;padding:9px 11px;align-items:center"><input type="radio" name="nt_plan" value="yes" ${e.planFollowed==='yes'?'checked':''}><span>✅ He seguido mi plan</span></label>
+        <label class="plan-item" style="flex:1;min-width:150px;margin:0;border:1px solid var(--line);border-radius:9px;padding:9px 11px;align-items:center"><input type="radio" name="nt_plan" value="no" ${e.planFollowed==='no'?'checked':''}><span>❌ No he seguido mi plan</span></label>
+      </div>
+    </div>
     <div class="field"><label id="nt_noteLabel">¿Por qué no entré? <span class="hint">explícalo bien, es tan valioso como un trade</span></label>
       <textarea id="nt_note" rows="4" placeholder="Qué viste en el gráfico, qué faltaba para tu setup, por qué decidiste esperar...">${e.note||''}</textarea>
     </div>
@@ -1850,6 +1888,8 @@ function ntTypeChange(){
   const noteLabel=$('#nt_noteLabel');
   const insight=$('#nt_insight');
   const note=$('#nt_note');
+  const planWrap=$('#nt_planWrap');
+  if(planWrap) planWrap.style.display = type==='unfilled' ? 'none' : '';
   if(type==='unfilled'){
     if(reasonWrap) reasonWrap.style.display='none';   // sin motivos predefinidos, lo explica en la nota
     if(noteLabel) noteLabel.innerHTML=`¿Qué pasó con la entrada? <span class="hint">explica cómo la gestionaste</span>`;
@@ -1895,7 +1935,10 @@ function saveNoTrade(id){
     const dup=(DB.noTradeDays||[]).find(d=>d.date===date && (d.type||'noday')==='noday' && d.id!==id);
     if(dup){ toast('Ya tienes un día sin operar para esta fecha'); return; }
   }
-  const nt={ id:id||uid(), date, type, reason:type==='noday'?$('#nt_reason').value:'', note:$('#nt_note').value.trim(), images:[...($('#modalBg')._ntImages||[])] };
+  const planSel=document.querySelector('input[name="nt_plan"]:checked');
+  const nt={ id:id||uid(), date, type, reason:type==='noday'?$('#nt_reason').value:'',
+    planFollowed: type==='noday' ? (planSel?planSel.value:'') : '',
+    note:$('#nt_note').value.trim(), images:[...($('#modalBg')._ntImages||[])] };
   DB.noTradeDays=DB.noTradeDays||[];
   if(id){ const i=DB.noTradeDays.findIndex(d=>d.id===id); DB.noTradeDays[i]=nt; }
   else DB.noTradeDays.push(nt);
