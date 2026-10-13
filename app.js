@@ -1796,11 +1796,22 @@ const PLAN_MANIPULACION_LTF=[
   'Solo se opera desde el ordenador, con el gráfico completo delante y el checklist leído. Desde el móvil no se abre nunca una posición'
 ];
 const ENTRY_TYPE_LABELS={manipulacion:'Manipulación',manipulacion_ltf:'Manipulación LTF',continuacion:'Continuación'};
-// Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible)
-function planChecklist(entryType){
-  if(entryType==='continuacion') return PLAN_CONTINUACION;
-  if(entryType==='manipulacion_ltf') return PLAN_MANIPULACION_LTF;
-  return PLAN_MANIPULACION;
+// Reglas que se añaden SOLO en trades de cuentas fondeadas (al final, para no mover las demás)
+const PLAN_FUNDED_EXTRA=['Cuenta fondeada: solo opero de 9h a 15h'];
+// Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible).
+// Si la fase es 'funded', añade las reglas propias de cuentas fondeadas.
+function planChecklist(entryType, phase){
+  let base=PLAN_MANIPULACION;
+  if(entryType==='continuacion') base=PLAN_CONTINUACION;
+  else if(entryType==='manipulacion_ltf') base=PLAN_MANIPULACION_LTF;
+  return phase==='funded' ? [...base, ...PLAN_FUNDED_EXTRA] : base;
+}
+// Fase del trade que se está editando en el formulario (manual o deducida de la cuenta)
+function modalPhase(){
+  const v=$('#f_phase')?.value;
+  if(v) return v;
+  const acc=DB.accounts.find(a=>a.name===$('#f_account')?.value);
+  return acc ? (acc.phase==='Funded'?'funded':'eval') : '';
 }
 // Calcula el setup automático según fallos: 0=A+, 1=A, 2=B, 3+=C
 function autoSetup(checkedCount, total){
@@ -2000,7 +2011,7 @@ function tradeModal(t){
         return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}${dead}</option>`;
       }).join('')}</select></div>
       <div class="field"><label>Fase del trade <span class="hint">en qué fase se hizo</span></label>
-        <select id="f_phase">
+        <select id="f_phase" onchange="rebuildChecklist()">
           <option value="" ${!e.phase?'selected':''}>— auto (según cuenta) —</option>
           <option value="eval" ${e.phase==='eval'?'selected':''}>Evaluación</option>
           <option value="funded" ${e.phase==='funded'?'selected':''}>Funded</option>
@@ -2084,7 +2095,7 @@ function tradeModal(t){
 function rebuildChecklist(initial){
   const box=$('#f_plan'); if(!box) return;
   const type=$('#f_entryType')?.value||'manipulacion';
-  const list=planChecklist(type);
+  const list=planChecklist(type, modalPhase());
   const saved=$('#modalBg')?._planChecked||[];
   box.innerHTML=list.map((rule,i)=>`<label class="plan-item">
     <input type="checkbox" data-plan="${i}" ${saved.includes(i)?'checked':''}>
@@ -2167,6 +2178,7 @@ function onAccountChange(){
   const acc=DB.accounts.find(a=>a.name===$('#f_account')?.value);
   const ph=$('#f_phase');
   if(acc && ph && !ph.value){ ph.value = acc.phase==='Funded'?'funded':'eval'; }
+  rebuildChecklist(); // la regla de cuentas fondeadas aparece/desaparece según la cuenta
 }
 function onRealizedRChange(){
   const r=parseFloat($('#f_realizedR')?.value);
@@ -2283,7 +2295,8 @@ function saveTrade(id){
   const newChecked=$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan);
   const newEntryType=$('#f_entryType')?.value||'manipulacion';
   // Si editas un trade antiguo sin tocar su checklist, conserva su nº de reglas original.
-  const checklistUntouched = existing && JSON.stringify(existing.planChecked||[])===JSON.stringify(newChecked) && (existing.entryType||'manipulacion')===newEntryType;
+  const newPhase=modalPhase();
+  const checklistUntouched = existing && JSON.stringify(existing.planChecked||[])===JSON.stringify(newChecked) && (existing.entryType||'manipulacion')===newEntryType && (existing.phase||'')===(newPhase||'');
   const t={
     id:id||uid(),
     date:$('#f_date').value,
@@ -2314,7 +2327,7 @@ function saveTrade(id){
     images:[...($('#modalBg')._images||[])],
     planChecked:newChecked,
     entryType:newEntryType,
-    planTotal: checklistUntouched ? existing.planTotal : planChecklist(newEntryType).length
+    planTotal: checklistUntouched ? existing.planTotal : planChecklist(newEntryType, newPhase).length
   };
   if(id){ const i=DB.trades.findIndex(x=>x.id===id); DB.trades[i]=t; }
   else DB.trades.push(t);
@@ -2784,6 +2797,7 @@ function buildAIReport(){
     L.push(`  ${ENTRY_TYPE_LABELS[k]}:`);
     list.forEach((r,i)=>L.push(`    ${i+1}. ${r}`));
   });
+  L.push(`  Solo en trades de cuentas fondeadas se añade al final: ${PLAN_FUNDED_EXTRA.join(' · ')}`);
   L.push('Flags de error posibles: '+Object.entries(FLAG_LABELS).filter(([k])=>k!=='clean').map(([,l])=>l).join(', '));
   line();
 
@@ -2851,7 +2865,7 @@ function buildAIReport(){
     L.push(`[T${i+1}] ${t.date} (${dow(t.date)}) · ${t.symbol||'—'} · cuenta: ${t.account||'sin cuenta'} · fase: ${ph==='funded'?'FUNDED':ph==='eval'?'EVAL':'—'}`);
     L.push(`  Tipo de entrada: ${ENTRY_TYPE_LABELS[t.entryType]||'no registrado (trade antiguo)'} · Setup: ${(t.setup||'—').replace('Setup ','')} · Sesión: ${t.session||'—'}${t.moveType?` · Origen del movimiento: ${MOVE_TYPES[t.moveType]||t.moveType}${t.moveOther?' ('+t.moveOther+')':''}`:''}`);
     if(t.planChecked!=null){
-      const list=planChecklist(t.entryType);
+      const list=planChecklist(t.entryType, tradePhase(t));
       const checked=t.planChecked||[];
       const txt=i=>list[i]!=null?list[i]:`regla ${i+1}`;
       if(t.planTotal){
