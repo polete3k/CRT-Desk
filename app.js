@@ -2643,133 +2643,243 @@ function importData(file){
 
 // Genera un informe de texto limpio (sin imágenes) para pegar en un chat de IA
 function buildAIReport(){
-  const T=[...DB.trades].sort((a,b)=> a.date<b.date?-1:1);
+  // Informe completo en texto plano pensado para que otra IA lo lea y lo analice.
+  // Usa EXACTAMENTE las mismas funciones de cálculo que el dashboard.
+  const T=[...DB.trades].sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0);
+  const NT=[...(DB.noTradeDays||[])].sort((a,b)=> a.date<b.date?-1:1);
   const L=[];
   const pct=v=>fmt(v,1)+'%';
-  L.push('=== INFORME CRT DESK ===');
-  L.push('Fecha de exportación: '+todayISO());
-  L.push('Trader: opera futuros intradía con metodología CRT (Candle Range Theory) en prop firms.');
-  L.push('');
-  // Resumen global
-  L.push('--- MÉTRICAS GLOBALES ---');
-  L.push(`Total de trades: ${T.length}`);
-  L.push(`Expectancy: ${fmtR(expectancy(T))} por trade`);
-  L.push(`Win rate: ${pct(winrate(T))}`);
-  L.push(`Profit factor: ${profitFactor(T)===Infinity?'∞':fmt(profitFactor(T),2)}`);
-  L.push(`R acumulado: ${fmtR(T.reduce((s,t)=>s+(t.realizedR||0),0))}`);
-  L.push(`P&L total: ${fmt$(totalPnl(T))}`);
-  const st=streaks(T);
-  L.push(`Racha actual: ${st.curCount} ${st.curType==='win'?'victorias':st.curType==='loss'?'derrotas':'-'} | Récord victorias: ${st.maxWin} | Récord derrotas: ${st.maxLoss}`);
-  L.push('');
-  // Métricas separadas por fase (eval vs funded)
-  const evalT=T.filter(t=>tradePhase(t)==='eval');
-  const fundedT=T.filter(t=>tradePhase(t)==='funded');
-  const phaseBlock=(label,arr)=>{
-    if(!arr.length) return;
-    L.push(`--- MÉTRICAS ${label} (${arr.length} trades) ---`);
-    L.push(`Expectancy: ${fmtR(expectancy(arr))} | Win rate: ${pct(winrate(arr))} | Profit factor: ${profitFactor(arr)===Infinity?'∞':fmt(profitFactor(arr),2)}`);
-    L.push(`R acumulado: ${fmtR(arr.reduce((s,t)=>s+(t.realizedR||0),0))} | P&L: ${fmt$(totalPnl(arr))}`);
-    const c=arr.filter(t=>!(t.flags||[]).some(f=>f!=='clean'));
-    L.push(`Disciplina: ${pct(arr.length?c.length/arr.length*100:0)} limpios`);
-    L.push('');
+  const pfTxt=arr=>{ const p=profitFactor(arr); return p===Infinity?'∞':fmt(p,2); };
+  const num=(x,d=2)=> (x==null||isNaN(x))?'—':fmt(x,d);
+  const isErr=t=>(t.flags||[]).some(f=>f!=='clean');
+  // Si no hay trades (o solo BE), mostrar "—" en vez de 0 para no confundir a la IA
+  const expT=arr=>arr.length?fmtR(expectancy(arr)):'—';
+  const wrT=arr=>arr.some(t=>t.result==='win'||t.result==='loss')?pct(winrate(arr)):'—';
+  const DOW=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+  const dow=d=>{ const [y,m,dd]=d.split('-').map(Number); return DOW[new Date(y,m-1,dd).getDay()]; };
+  const EXIT_LABELS={target:'TP completo',manual:'Cierre manual antes del TP',be_moved:'Movió a BE y saltó',stop:'SL (saltó el stop)'};
+  const STATUS_LABELS={en_curso:'En curso',pasada:'Pasada',fondeada:'Fondeada',payout:'Con payout',perdida:'Perdida (quemada)'};
+  const months=[...new Set(T.map(t=>t.date.slice(0,7)).concat(NT.map(n=>n.date.slice(0,7))))].sort();
+  const line=()=>L.push('');
+
+  // ---------- Bloque de estadísticas (se usa para el total y para cada mes) ----------
+  const statsBlock=(arr)=>{
+    if(!arr.length){ L.push('Sin trades.'); return; }
+    const W=arr.filter(t=>t.result==='win'), Ls=arr.filter(t=>t.result==='loss'), B=arr.filter(t=>t.result==='be');
+    const risks=arr.map(t=>t.riskUSD).filter(x=>x>0);
+    L.push(`Trades: ${arr.length} (${W.length} ganadores, ${Ls.length} perdedores, ${B.length} BE) · días operados: ${new Set(arr.map(t=>t.date)).size}`);
+    L.push(`Expectancy: ${fmtR(expectancy(arr))} por trade · Win rate: ${wrT(arr)} · Profit factor: ${pfTxt(arr)}`);
+    L.push(`Avg win: ${fmtR(avgWin(arr))} · Avg loss: ${fmtR(avgLoss(arr))} · R total: ${fmtR(totalR(arr))} · P&L: ${fmt$(totalPnl(arr))} · Riesgo medio por trade: ${risks.length?fmt$(risks.reduce((a,b)=>a+b,0)/risks.length):'—'}`);
+    const st=streaks(arr);
+    L.push(`Max drawdown: -${num(maxDrawdownR(arr))}R · Racha récord: ${st.maxWin} victorias / ${st.maxLoss} derrotas · Racha al final del periodo: ${st.curCount} ${st.curType==='win'?'victorias':st.curType==='loss'?'derrotas':'—'}`);
+    L.push(`Kelly: ${pct(kellyFraction(arr)*100)}${arr.length<30?' (poco fiable: menos de 30 trades)':''}`);
+    // Disciplina
+    const clean=arr.filter(t=>!isErr(t)), dirty=arr.filter(isErr);
+    const dc=disciplineCost(arr);
+    L.push(`Disciplina: ${pct(disciplineRate(arr))} trades limpios (${clean.length} limpios / ${dirty.length} con flag de error) · Expectancy limpios ${expT(clean)} vs con error ${expT(dirty)}`);
+    L.push(`Coste neto de los errores: ${fmtR(-dc.lostR||0)} (${fmt$(-dc.lost$||0)})${dc.luckyN?` · de ellos, ${dc.luckyN} trade(s) con error salieron bien por suerte (+${num(dc.luckyR)}R, ya descontado)`:''}`);
+    const withPlan=arr.filter(t=>t.planChecked!=null);
+    const full=withPlan.filter(t=>planComplete(t)), partial=withPlan.filter(t=>!planComplete(t));
+    L.push(`Plan completo: ${full.length} trades (exp ${expT(full)}, WR ${wrT(full)}) · Plan incompleto: ${partial.length} trades (exp ${expT(partial)}, WR ${wrT(partial)})`);
+    const sc=arr.map(tradeDiscScore).filter(x=>x!=null);
+    if(sc.length){ const avg=sc.reduce((a,b)=>a+b,0)/sc.length; L.push(`Nota de disciplina media de los trades: ${discStyle(avg).label} (${num(avg)}/4)`); }
+    // Errores por tipo
+    const fs={};
+    arr.forEach(t=>(t.flags||[]).forEach(f=>{ if(f==='clean')return; fs[f]=fs[f]||{n:0,c:0}; fs[f].n++; fs[f].c+=tradeErrorCost(t); }));
+    const fr=Object.entries(fs).sort((a,b)=>b[1].c-a[1].c);
+    if(fr.length) L.push('Errores por tipo (veces · coste en R): '+fr.map(([k,s])=>`${FLAG_LABELS[k]||k} ${s.n}× · ${fmtR(-s.c||0)}`).join(' | '));
+    // R:R óptimo + DOL
+    const o=optimalRR(arr);
+    if(o.enough){
+      L.push(`R:R óptimo según MFE: 1:${fmtTP(o.best.tp)} (expectancy simulada ${fmtR(o.best.exp)}, TP alcanzado el ${pct(o.best.wr)}) · DOL medio: ${o.avgDol!=null?num(o.avgDol)+'R ('+o.dolN+' trades)':'sin datos'} · base: ${o.n} trades con MFE`);
+    } else L.push(`R:R óptimo: datos insuficientes (${o.n} trades con MFE, mínimo 5)`);
+    const withDol=arr.filter(t=>(t.dolReached==='yes'||t.dolReached==='no')&&t.result!=='loss');
+    if(withDol.length){
+      const yes=withDol.filter(t=>t.dolReached==='yes');
+      const no=withDol.filter(t=>t.dolReached==='no'&&t.mfe!=null&&!isNaN(t.mfe));
+      L.push(`DOL: de ${withDol.length} trades no perdedores, el precio llegó al DOL final el ${pct(yes.length/withDol.length*100)}${no.length?` · cuando no llega se queda de media en ${num(no.reduce((s,t)=>s+t.mfe,0)/no.length)}R (MFE)`:''}`);
+    }
+    const mfes=arr.filter(t=>t.mfe!=null&&!isNaN(t.mfe)).map(t=>t.mfe);
+    if(mfes.length) L.push(`MFE medio: ${num(mfes.reduce((a,b)=>a+b,0)/mfes.length)}R (${mfes.length} trades)`);
+    // MAE
+    const maeOf=t=>Math.abs(t.mae);
+    const wM=arr.filter(t=>t.result==='win'&&t.mae!=null&&!isNaN(t.mae)), lM=arr.filter(t=>t.result==='loss'&&t.mae!=null&&!isNaN(t.mae));
+    if(wM.length||lM.length) L.push(`MAE: ganadores media ${wM.length?num(wM.reduce((s,t)=>s+maeOf(t),0)/wM.length):'—'}R, máximo ${wM.length?num(Math.max(...wM.map(maeOf))):'—'}R (${wM.length}) · perdedores media ${lM.length?num(lM.reduce((s,t)=>s+maeOf(t),0)/lM.length):'—'}R (${lM.length})`);
+    // BE
+    const be=arr.filter(t=>t.exitType==='be_moved');
+    if(be.length){
+      const tp=be.filter(t=>t.mfe!=null&&!isNaN(t.mfe)&&t.mfe>=(t.plannedR||0));
+      L.push(`Break-even: ${be.length} salidas por BE · ${tp.length} habrían llegado a TP (dejaste ${num(tp.reduce((s,t)=>s+(t.plannedR||0),0))}R / ${fmt$(tp.reduce((s,t)=>s+(t.plannedR||0)*(t.riskUSD||0),0))})`);
+    }
+    // Cierres manuales
+    const man=arr.filter(t=>t.exitType==='manual'&&(t.realizedR||0)>=0&&t.mfe!=null&&!isNaN(t.mfe));
+    if(man.length){
+      const mc=man.filter(t=>!isErr(t)), me=man.filter(isErr);
+      const meTP=me.filter(t=>t.mfe>=(t.plannedR||0));
+      const cost=meTP.reduce((s,t)=>s+Math.max(0,(t.plannedR||0)-(t.realizedR||0)),0);
+      L.push(`Cierres manuales: ${man.length} (${mc.length} limpios, de los que ${mc.filter(t=>t.mfe>=(t.plannedR||0)).length} habrían llegado a TP · ${me.length} con error, de los que ${meTP.length} habrían llegado a TP: coste ${num(cost)}R)`);
+    }
   };
-  phaseBlock('EVALUACIÓN', evalT);
-  phaseBlock('FUNDED', fundedT);
-  // Disciplina
-  const clean=T.filter(t=>!(t.flags||[]).some(f=>f!=='clean'));
-  const dirty=T.filter(t=>(t.flags||[]).some(f=>f!=='clean'));
-  L.push('--- DISCIPLINA ---');
-  L.push(`Tasa de disciplina: ${pct(T.length?clean.length/T.length*100:0)} (${clean.length} limpios / ${dirty.length} con error)`);
-  L.push(`Expectancy trades limpios: ${fmtR(expectancy(clean))} | con error: ${fmtR(expectancy(dirty))}`);
-  // errores por tipo
-  const flagCount={};
-  T.forEach(t=>(t.flags||[]).forEach(f=>{ if(f!=='clean') flagCount[f]=(flagCount[f]||0)+1; }));
-  if(Object.keys(flagCount).length){
-    L.push('Errores por tipo: '+Object.entries(flagCount).map(([k,n])=>`${FLAG_LABELS[k]||k}: ${n}`).join(', '));
-  }
-  L.push('');
-  // Desgloses
-  const bd=(key,label)=>{
-    const rows=breakdown(T,key);
+
+  // ---------- Desglose por categoría ----------
+  const group=(arr,keyFn,label)=>{
+    const g={};
+    arr.forEach(t=>{ const k=keyFn(t)||'—'; (g[k]=g[k]||[]).push(t); });
+    const rows=Object.entries(g).sort((a,b)=>totalR(b[1])-totalR(a[1]));
     if(!rows.length) return;
     L.push(`Por ${label}:`);
-    rows.forEach(r=>L.push(`  - ${r.key}: ${r.n} trades, exp ${fmtR(r.exp)}, WR ${pct(r.wr)}, R acum ${fmtR(r.r)}`));
+    rows.forEach(([k,ts])=>L.push(`  - ${k}: ${ts.length} trades · exp ${expT(ts)} · WR ${wrT(ts)} · R ${fmtR(totalR(ts))} · P&L ${fmt$(totalPnl(ts))} · con error ${pct(ts.filter(isErr).length/ts.length*100)}`));
   };
-  L.push('--- RENDIMIENTO POR CATEGORÍA ---');
-  bd('session','sesión'); bd('symbol','símbolo'); bd('setup','setup'); bd('weekday','día de la semana');
-  L.push('');
-  // Origen del movimiento
-  const withMove=T.filter(t=>t.moveType);
-  if(withMove.length){
-    L.push('Origen del movimiento (CRT):');
-    const g={}; withMove.forEach(t=>(g[t.moveType]=g[t.moveType]||[]).push(t));
-    Object.keys(g).forEach(k=>L.push(`  - ${MOVE_TYPES[k]||k}: ${g[k].length} trades, exp ${fmtR(expectancy(g[k]))}`));
-    L.push('');
-  }
-  // SMT / RS Scalp
-  const smt=T.filter(t=>t.smt==='yes'&&t.smtResult);
-  if(smt.length){
-    const tp=smt.filter(t=>t.smtResult==='tp').length;
-    L.push(`RS Scalp (SMT): ${smt.length} señales, ${pct(tp/smt.length*100)} a TP`);
-    L.push('');
-  }
-  // MFE/DOL
-  const withDol=T.filter(t=>(t.dolReached==='yes'||t.dolReached==='no')&&t.result!=='loss');
-  if(withDol.length){
-    const reached=withDol.filter(t=>t.dolReached==='yes').length;
-    L.push(`DOL: de ${withDol.length} trades no perdedores, el precio llegó al DOL final el ${pct(reached/withDol.length*100)}`);
-    L.push('');
-  }
-  // Lista de trades
-  L.push('--- LISTA DE TRADES ---');
-  T.forEach((t,i)=>{
-    const parts=[`#${i+1}`, t.date, t.symbol||'', t.session||'', t.setup||''];
-    parts.push(`R plan ${t.plannedR??'?'} / R real ${t.realizedR??'?'}`);
-    if(!isNaN(t.riskUSD)&&t.riskUSD) parts.push('riesgo $'+t.riskUSD);
-    parts.push(t.result==='win'?'GANADOR':t.result==='loss'?'PERDEDOR':'BE');
-    if(t.exitType) parts.push('salida:'+t.exitType);
-    if(t.account) parts.push('cuenta:'+t.account);
-    const ph=tradePhase(t); if(ph) parts.push('fase:'+(ph==='funded'?'FUNDED':'EVAL'));
-    if(!isNaN(t.mfe)&&t.mfe!=null) parts.push('MFE '+t.mfe+'R');
-    if(!isNaN(t.mae)&&t.mae!=null) parts.push('MAE '+Math.abs(t.mae)+'R');
-    if(t.dolReached) parts.push('DOL:'+t.dolReached);
-    if(!isNaN(t.dolR)&&t.dolR!=null) parts.push('DOL@'+t.dolR+'R');
-    if(t.moveType) parts.push('mov:'+(MOVE_TYPES[t.moveType]||t.moveType)+(t.moveOther?' ('+t.moveOther+')':''));
-    if(t.smt==='yes') parts.push('SMT:'+t.smtResult+'/'+t.smtTiming);
-    const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
-    if(errs.length) parts.push('FLAGS: '+errs.join('/'));
-    else parts.push('limpio');
-    L.push(parts.filter(Boolean).join(' | '));
-    if(t.note) L.push('   Nota: '+t.note);
+  const breakdowns=(arr,full)=>{
+    group(arr,t=>{const p=tradePhase(t); return p==='funded'?'Funded':p==='eval'?'Evaluación':'Sin cuenta';},'fase');
+    group(arr,t=>ENTRY_TYPE_LABELS[t.entryType]||(t.entryType?t.entryType:'Sin tipo (trades antiguos)'),'tipo de entrada');
+    group(arr,t=>t.setup,'setup');
+    group(arr,t=>t.session,'sesión');
+    if(full){
+      group(arr,t=>t.symbol,'símbolo');
+      group(arr,t=>dow(t.date),'día de la semana');
+      group(arr,t=>t.moveType?(MOVE_TYPES[t.moveType]||t.moveType):null,'origen del movimiento (CRT)');
+      group(arr,t=>EXIT_LABELS[t.exitType]||t.exitType,'tipo de salida');
+    }
+  };
+
+  // ---------- Disciplina diaria (calendario) ----------
+  const calendarBlock=(ym)=>{
+    const byDay={};
+    T.filter(t=>!ym||t.date.startsWith(ym)).forEach(t=>(byDay[t.date]=byDay[t.date]||[]).push(t));
+    const days=Object.values(byDay).map(dayDisciplina).filter(x=>x.score!=null);
+    const nd=NT.filter(n=>(n.type||'noday')==='noday'&&(!ym||n.date.startsWith(ym))&&!byDay[n.date]).map(noTradeDisciplina);
+    const ndM=nd.filter(x=>x.score!=null);
+    const all=[...days,...ndM];
+    if(!all.length&&!nd.length) return;
+    const cnt=f=>all.filter(f).length;
+    const avg=all.length?all.reduce((s,x)=>s+x.score,0)/all.length:null;
+    L.push(`Calendario de disciplina: nota media ${avg==null?'—':discStyle(avg).label+' ('+num(avg)+'/4)'} · días A+/A: ${cnt(x=>x.score>=2.5)} · días B: ${cnt(x=>x.score>=1.5&&x.score<2.5)} · días C: ${cnt(x=>x.score<1.5)} · días sin operar: ${nd.length} (${ndM.filter(x=>x.score>=3.5).length} siguiendo el plan, ${ndM.filter(x=>x.score<1.5).length} sin seguirlo, ${nd.length-ndM.length} sin marcar)`);
+  };
+
+  // =================== CABECERA E INSTRUCCIONES ===================
+  L.push('=== INFORME COMPLETO DEL JOURNAL DE TRADING — CRT DESK (FUTUROS) ===');
+  L.push(`Exportado: ${todayISO()} · Periodo: ${T.length?T[0].date+' → '+T[T.length-1].date:'sin trades'} · ${T.length} trades · ${NT.filter(n=>(n.type||'noday')==='noday').length} días sin operar · ${NT.filter(n=>n.type==='unfilled').length} entradas no ejecutadas`);
+  L.push('Trader: opera futuros intradía (MNQ, MES, MYM...) con metodología CRT (Candle Range Theory) en prop firms (evaluaciones y cuentas fondeadas).');
+  line();
+  L.push('## 0. CÓMO LEER ESTE INFORME');
+  L.push('- Unidad: R. 1R = el riesgo del trade (distancia de la entrada al stop loss). +2R = ganó el doble de lo arriesgado; -1R = saltó el stop.');
+  L.push('- Resultado: se deduce del R realizado (>0 ganador, <0 perdedor, =0 BE). Los importes en $ son reales del bróker.');
+  L.push('- Win rate: ganadores / (ganadores + perdedores); los BE no cuentan. Expectancy: media de R por trade (los BE cuentan como 0). Profit factor: R ganados / R perdidos.');
+  L.push('- Max drawdown: mayor caída desde un máximo de la curva de R acumulado, en orden cronológico.');
+  L.push('- Kelly = WR - (1-WR)/(avg win/|avg loss|). Es un termómetro de si hay ventaja, no un tamaño de posición.');
+  L.push('- MFE: hasta cuántos R llegó el precio a favor (medido en la ventana del trade, aunque no se cobrara). MAE: cuántos R fue en contra antes de resolverse (siempre positivo).');
+  L.push('- DOL (draw on liquidity): objetivo de liquidez del trade. "DOL a XR" = a qué distancia estaba en R. "¿Llegó al DOL?" = si el precio lo alcanzó.');
+  L.push('- Flags de error: marcados por el trader en cada trade. "Limpio" = ejecución sin errores.');
+  L.push('- Coste de los errores (por trade): error de entrada (FOMO, sin setup válido, revenge, superé máx. stops, contra bias, error de análisis) → cuesta su resultado entero (el trade no debía existir); cierre temprano por miedo → TP planificado − R realizado, solo si el MFE llegó al TP; moví el stop → lo perdido más allá de -1R; sobre-dimensioné → 0R. Es neto: un error que salió bien resta coste.');
+  L.push('- Checklist del plan: hay 3 tipos de entrada con su checklist (abajo). Setup automático por reglas falladas: 0 = A+, 1 = A, 2 = B, 3 o más = C (el trader puede cambiarlo a mano). "Plan completo" se mide contra la checklist que había cuando se registró el trade.');
+  L.push('- Nota de disciplina: A+ = 4, A = 3, B = 2, C = 1; un trade con cualquier flag de error cuenta como C. El día hace la media (≥3,5 A+, ≥2,5 A, ≥1,5 B, resto C). Días sin operar: 4 si siguió el plan, 1 si no; sin marcar no cuentan.');
+  L.push('- R:R óptimo: para cada TP de 0,25R a 4R, si el MFE llegó → +TP; si no llegó y tocó el SL (perdedor o MAE ≥ 1) → -1R; si no llegó a ninguno (BE, cierre manual) → 0R. El óptimo es el TP con mayor expectancy simulada.');
+  L.push('- Checklist de trades antiguos: si un trade no tiene registrado su total de reglas, sus reglas cumplidas se muestran con el texto de la checklist ACTUAL. El orden de las reglas es el mismo, pero alguna tenía otra redacción entonces (p. ej. "rangos LTF 8h-2h" en vez de "12h-1h", o "no tener rango contrario cerca"). Para esos trades, el setup guardado indica cuántas reglas falló (A+ = ninguna).');
+  L.push('- "—" significa sin datos (no cero).');
+  L.push('- Muestras pequeñas (sobre todo en meses sueltos) dan métricas poco fiables; tenlo en cuenta al sacar conclusiones.');
+  line();
+  L.push('Checklists vigentes:');
+  [['manipulacion',PLAN_MANIPULACION],['manipulacion_ltf',PLAN_MANIPULACION_LTF],['continuacion',PLAN_CONTINUACION]].forEach(([k,list])=>{
+    L.push(`  ${ENTRY_TYPE_LABELS[k]}:`);
+    list.forEach((r,i)=>L.push(`    ${i+1}. ${r}`));
   });
-  L.push('');
-  // No-trades y entradas no ejecutadas
-  const nts=DB.noTradeDays||[];
-  if(nts.length){
-    L.push('--- DÍAS SIN TRADE / ENTRADAS NO EJECUTADAS ---');
-    nts.forEach(n=>{
-      const tipo=n.type==='unfilled'?'Entrada no ejecutada':'Día sin operar';
-      L.push(`${n.date} | ${tipo}${n.reason?' ('+(NOTRADE_REASONS[n.reason]||n.reason)+')':''}${n.note?' — '+n.note:''}`);
-    });
-    L.push('');
-  }
-  // ROI de props
+  L.push('Flags de error posibles: '+Object.entries(FLAG_LABELS).filter(([k])=>k!=='clean').map(([,l])=>l).join(', '));
+  line();
+
+  // =================== 1. TOTAL ===================
+  L.push('## 1. ESTADÍSTICAS TOTALES (todo el historial)');
+  statsBlock(T);
+  L.push(`Racha actual de días limpios (sin ningún trade con error): ${cleanDayStreak(T)}`);
+  calendarBlock(null);
+  const o=optimalRR(T);
+  if(o.enough) L.push('Curva R:R simulada (TP → expectancy): '+o.curve.map(c=>`1:${fmtTP(c.tp)} ${fmtR(c.exp)}`).join(' | '));
+  line();
+  L.push('Desgloses del total:');
+  breakdowns(T,true);
+  line();
+
+  // =================== 2. POR MES ===================
+  L.push('## 2. ESTADÍSTICAS POR MES');
+  L.push('Comparativa (mes · trades · expectancy · WR · R · P&L · % limpios · coste errores · nota disciplina trades):');
+  months.forEach(ym=>{
+    const arr=T.filter(t=>t.date.startsWith(ym));
+    if(!arr.length){ L.push(`  - ${monthLabel(ym)}: sin trades`); return; }
+    const sc=arr.map(tradeDiscScore).filter(x=>x!=null);
+    const avg=sc.length?sc.reduce((a,b)=>a+b,0)/sc.length:null;
+    L.push(`  - ${monthLabel(ym)}: ${arr.length} · ${expT(arr)} · ${wrT(arr)} · ${fmtR(totalR(arr))} · ${fmt$(totalPnl(arr))} · ${pct(disciplineRate(arr))} · ${fmtR(-disciplineCost(arr).lostR||0)} · ${avg==null?'—':discStyle(avg).label}`);
+  });
+  line();
+  months.forEach(ym=>{
+    const arr=T.filter(t=>t.date.startsWith(ym));
+    L.push(`### ${monthLabel(ym)} (${ym})`);
+    statsBlock(arr);
+    calendarBlock(ym);
+    if(arr.length) breakdowns(arr,false);
+    line();
+  });
+
+  // =================== 3. CUENTAS Y ROI ===================
+  const accts=DB.accounts||[];
   const costs=DB.propCosts||[], payouts=DB.payouts||[];
-  if(costs.length||payouts.length||(DB.accounts||[]).length){
-    const spent=costs.reduce((s,c)=>s+(c.amount||0),0);
-    const collected=payouts.reduce((s,p)=>s+(p.amount||0),0);
-    const accts=DB.accounts||[];
-    const reachedFunded=a=>a.phase==='Funded'||['fondeada','payout'].includes(a.status);
-    const nPassed=accts.filter(a=>a.status==='pasada'||reachedFunded(a)).length;
-    const nFunded=accts.filter(reachedFunded).length;
-    const nPayout=accts.filter(a=>a.status==='payout').length;
-    L.push('--- ROI DE PROPS ---');
-    L.push(`Gastado en cuentas: ${fmt$(spent)} (${costs.length} costes) | Cobrado en payouts: ${fmt$(collected)} (${payouts.length} payouts)`);
-    L.push(`Neto: ${fmt$(collected-spent)}${spent>0?' | ROI: '+fmt((collected-spent)/spent*100,0)+'%':''}`);
-    L.push(`Estadística de cuentas: ${accts.length} cuentas | ${nPassed} pasadas${accts.length?' ('+pct(nPassed/accts.length*100)+')':''} | ${nFunded} fondeadas | ${nPayout} con payout`);
-    if(payouts.length) L.push(`Payout medio: ${fmt$(collected/payouts.length)}`);
-    L.push('');
+  L.push('## 3. CUENTAS DE PROP FIRMS Y ROI');
+  const spent=costs.reduce((s,c)=>s+(c.amount||0),0), collected=payouts.reduce((s,p)=>s+(p.amount||0),0);
+  L.push(`Gastado: ${fmt$(spent)} (${costs.length} costes) · Cobrado: ${fmt$(collected)} (${payouts.length} payouts) · Neto: ${fmt$(collected-spent)}${spent>0?' · ROI: '+fmt((collected-spent)/spent*100,0)+'%':''}`);
+  const reachedFunded=a=>a.phase==='Funded'||['fondeada','payout'].includes(a.status);
+  const nPassed=accts.filter(a=>a.status==='pasada'||reachedFunded(a)).length;
+  const nDone=accts.filter(a=>(a.status||'en_curso')!=='en_curso'||reachedFunded(a)).length;
+  L.push(`Cuentas: ${accts.length} · en curso ${accts.filter(a=>(a.status||'en_curso')==='en_curso').length} · pasadas ${nPassed} (${nDone?pct(nPassed/nDone*100):'—'} de ${nDone} terminadas) · llegaron a fondeada ${accts.filter(reachedFunded).length} · con payout ${accts.filter(a=>a.status==='payout').length} · perdidas ${accts.filter(a=>a.status==='perdida').length}`);
+  accts.forEach(a=>{
+    const spec=planSpec(a.firm,a.plan,a.phase)||{};
+    const all=T.filter(t=>t.account===a.name);
+    const aT=a.phase==='Funded'?all.filter(t=>tradePhase(t)==='funded'):all;
+    const realized=totalPnl(aT), balance=(a.startBalance||0)+realized;
+    let run=a.startBalance||0, peak=run;
+    aT.forEach(t=>{ run+=(t.pnl||0); if(run>peak) peak=run; });
+    const floor=(spec.trailLock&&peak>=spec.trailLock)?spec.lockedFloor:peak-(spec.drawdown||0);
+    const tgt=spec.profitTarget||0;
+    L.push(`  - ${a.name} · ${a.firm} ${a.plan} · fase ${a.phase} · estado ${STATUS_LABELS[a.status||'en_curso']||a.status} · ${all.length} trades (${aT.length} cuentan en el balance) · exp ${expT(aT)} · P&L ${fmt$(realized)} · balance ${fmt$(balance)} · suelo DD ${fmt$(floor)} · margen ${fmt$(balance-floor)}${a.phase==='Evaluación'&&tgt?` · objetivo ${fmt$(tgt)} (${pct(Math.max(0,realized/tgt*100))})`:''}`);
+  });
+  if(costs.length){ L.push('Costes: '+costs.map(c=>`${c.date} ${c.concept||c.firm||''} ${fmt$(c.amount)}`).join(' | ')); }
+  if(payouts.length){ L.push('Payouts: '+payouts.map(p=>`${p.date} ${p.concept||p.firm||''} ${fmt$(p.amount)}`).join(' | ')); }
+  line();
+
+  // =================== 4. TODOS LOS TRADES ===================
+  L.push('## 4. DETALLE DE CADA TRADE (orden cronológico)');
+  T.forEach((t,i)=>{
+    const ph=tradePhase(t);
+    L.push(`[T${i+1}] ${t.date} (${dow(t.date)}) · ${t.symbol||'—'} · cuenta: ${t.account||'sin cuenta'} · fase: ${ph==='funded'?'FUNDED':ph==='eval'?'EVAL':'—'}`);
+    L.push(`  Tipo de entrada: ${ENTRY_TYPE_LABELS[t.entryType]||'no registrado (trade antiguo)'} · Setup: ${(t.setup||'—').replace('Setup ','')} · Sesión: ${t.session||'—'}${t.moveType?` · Origen del movimiento: ${MOVE_TYPES[t.moveType]||t.moveType}${t.moveOther?' ('+t.moveOther+')':''}`:''}`);
+    if(t.planChecked!=null){
+      const list=planChecklist(t.entryType);
+      const checked=t.planChecked||[];
+      const txt=i=>list[i]!=null?list[i]:`regla ${i+1}`;
+      if(t.planTotal){
+        const failed=[]; for(let k=0;k<t.planTotal;k++) if(!checked.includes(k)) failed.push(k);
+        L.push(`  Plan: ${checked.length}/${t.planTotal} reglas cumplidas${planComplete(t)?' (completo)':''}. Falladas: ${failed.length?failed.map(txt).join(' · '):'ninguna'}`);
+      } else {
+        L.push(`  Plan: ${checked.length} reglas marcadas (checklist antigua: no consta el total; textos según la versión actual)${checked.length?'. Cumplidas: '+checked.map(txt).join(' · '):''}`);
+      }
+    }
+    L.push(`  Riesgo: ${t.riskUSD?fmt$(t.riskUSD):'—'} · R planificado: ${num(t.plannedR)} · R realizado: ${fmtR(t.realizedR||0)} · P&L: ${fmt$(t.pnl||0)} · Resultado: ${t.result==='win'?'GANADOR':t.result==='loss'?'PERDEDOR':'BE'} · Salida: ${EXIT_LABELS[t.exitType]||t.exitType||'—'}`);
+    L.push(`  MFE: ${t.mfe!=null&&!isNaN(t.mfe)?num(t.mfe)+'R':'—'} · MAE: ${t.mae!=null&&!isNaN(t.mae)?num(Math.abs(t.mae))+'R':'—'} · DOL a: ${t.dolR!=null&&!isNaN(t.dolR)?num(t.dolR)+'R':'—'} · ¿Llegó al DOL?: ${t.dolReached==='yes'?'sí':t.dolReached==='no'?'no':'—'}`);
+    const errs=(t.flags||[]).filter(f=>f!=='clean');
+    const ds=tradeDiscScore(t);
+    L.push(`  Flags: ${errs.length?errs.map(f=>FLAG_LABELS[f]||f).join(', '):'limpio'}${errs.length?` · coste del error: ${fmtR(-tradeErrorCost(t)||0)}`:''} · nota de disciplina: ${ds==null?'—':discStyle(ds).label}${t.smt==='yes'?` · SMT (dato antiguo): ${t.smtResult}/${t.smtTiming}`:''}${(t.images&&t.images.length)?` · ${t.images.length} captura(s) no incluidas`:''}`);
+    if(t.note) L.push(`  Nota del trader: ${t.note.replace(/\s*\n\s*/g,' ')}`);
+  });
+  line();
+
+  // =================== 5. DÍAS SIN OPERAR ===================
+  if(NT.length){
+    L.push('## 5. DÍAS SIN OPERAR Y ENTRADAS NO EJECUTADAS');
+    NT.forEach(n=>{
+      const noday=(n.type||'noday')==='noday';
+      L.push(`- ${n.date} (${dow(n.date)}) · ${noday?'Día sin operar':'Entrada no ejecutada'}${n.reason?' · motivo: '+(NOTRADE_REASONS[n.reason]||n.reason):''}${noday?' · ¿siguió el plan?: '+(n.planFollowed==='yes'?'sí':n.planFollowed==='no'?'no':'sin marcar'):''}${n.note?' · nota: '+n.note.replace(/\s*\n\s*/g,' '):''}`);
+    });
+    line();
   }
+  L.push('=== FIN DEL INFORME ===');
   return L.join('\n');
 }
 function exportAIReport(){
