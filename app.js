@@ -178,6 +178,7 @@ const HELP_TEXTS={
   manualclose:['Cierres manuales','Analiza tus cierres antes del TP. Respeta tu criterio: si marcaste "limpio", fue buena decisión. Solo cuenta como coste los que marcaste con error.'],
   dolreach:['¿Llega al DOL?','De tus trades que no acabaron en stop, cada cuánto el precio llega a tu DOL final. Te dice si aguantar hasta el DOL compensa o conviene asegurar antes.'],
   beanalysis:['Análisis de BE','De tus salidas por BE saltado: cuántos moviste según plan vs por impulso, y cuántos habrían ido a TP (usando el MFE). Te dice si mover el BE pronto te cuesta ganadores.'],
+  sessionmfe:['MFE y MAE por sesión','Compara cómo se mueve el precio en cada sesión: hasta dónde llega a favor (MFE), cuánto aguanta en contra antes de ganar o perder (MAE), cuántas veces llega al DOL y qué TP rinde más. Sirve para ajustar TP y SL según la sesión.'],
   maeanalysis:['¿SL demasiado lejos?','Usa el MAE (cuánto fue el precio en contra) de tus ganadores para ver si tu stop está muy holgado. Si tus ganadores sufren poco antes de girarse, podrías ajustar el SL. Te avisa de no comerte las manipulaciones.'],
   movetype:['Origen del movimiento','Compara tu rendimiento según dónde empezó el movimiento: el impulso de apertura NY (9:30-10h) o el PO3 de la vela de 4h de las 10h. Te dice con qué estructura CRT ganas más.'],
   smt:['RS Scalp (SMT)','De las entradas por SMT que aparecieron (entraras o no): cuántas van a TP y si el timing respecto a la apertura NY influye. Sirve para validar esta subestrategia antes de confiar en ella.'],
@@ -339,6 +340,29 @@ function monthBreakdown(trades){
    Para cada nivel de TP simula: si el MFE del trade >= TP -> habría cobrado ese TP (+TP R).
    Si no -> el trade se habría ido al SL (-1R), asumiendo SL fijo de -1R.
    Devuelve la expectancy de cada nivel y cuál es el óptimo. */
+// MFE / MAE por sesión: hasta dónde llega el precio a favor, cuánto aguanta en contra,
+// % que llega al DOL y R:R óptimo (mismo método que la tarjeta general) en cada sesión.
+function sessionMfeMae(trades){
+  const order=[...SESSIONS];
+  const g={};
+  trades.forEach(t=>{ const k=t.session||'Sin sesión'; (g[k]=g[k]||[]).push(t); if(!order.includes(k)) order.push(k); });
+  const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:null;
+  return order.filter(k=>g[k]).map(k=>{
+    const ts=g[k];
+    const mfe=ts.filter(t=>t.mfe!=null&&!isNaN(t.mfe)).map(t=>Math.max(0,t.mfe));
+    const maeW=ts.filter(t=>t.result==='win'&&t.mae!=null&&!isNaN(t.mae)).map(t=>Math.abs(t.mae));
+    const maeL=ts.filter(t=>t.result==='loss'&&t.mae!=null&&!isNaN(t.mae)).map(t=>Math.abs(t.mae));
+    const dol=ts.filter(t=>(t.dolReached==='yes'||t.dolReached==='no')&&t.result!=='loss');
+    const o=optimalRR(ts);
+    return { session:k, n:ts.length, exp:expectancy(ts),
+      nMfe:mfe.length, mfe:avg(mfe),
+      nMaeW:maeW.length, maeW:avg(maeW), maeWmax:maeW.length?Math.max(...maeW):null,
+      nMaeL:maeL.length, maeL:avg(maeL),
+      nDol:dol.length, dolPct:dol.length?dol.filter(t=>t.dolReached==='yes').length/dol.length*100:null,
+      opt:o.enough?o.best:null };
+  });
+}
+
 // Formatea un nivel de TP sin redondear de más: 1 → "1", 1.25 → "1,25", 0.5 → "0,5"
 function fmtTP(x){ return String(Math.round(x*100)/100).replace('.',','); }
 function optimalRR(trades){
@@ -872,6 +896,33 @@ function renderPerformance(v, T){
           ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCost$)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
         `}
         `;
+      })()}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>MFE y MAE por sesión ${helpIcon("sessionmfe")}</h3>
+      ${(()=>{
+        const rows=sessionMfeMae(T).filter(r=>r.nMfe||r.nMaeW||r.nMaeL);
+        if(!rows.length) return `<p class="hint">Registra MFE y MAE en tus trades para ver cómo se mueve el precio en cada sesión.</p>`;
+        const r2=x=>x==null?'—':fmt(x,2)+'R';
+        const withOpt=rows.filter(r=>r.opt);
+        const best=withOpt.length>=2?[...withOpt].sort((a,b)=>b.opt.exp-a.opt.exp)[0]:null;
+        const worst=withOpt.length>=2?[...withOpt].sort((a,b)=>a.opt.exp-b.opt.exp)[0]:null;
+        const small=rows.filter(r=>r.nMfe>0&&r.nMfe<10);
+        return `<div class="table-wrap" style="border:none"><table>
+          <thead><tr><th>Sesión</th><th>N</th><th>MFE medio</th><th>MAE ganadores</th><th>MAE perdedores</th><th>Llega al DOL</th><th>R:R óptimo</th></tr></thead>
+          <tbody>${rows.map(r=>`<tr>
+            <td style="font-family:var(--sans);font-weight:600">${r.session}</td>
+            <td>${r.n}</td>
+            <td>${r2(r.mfe)} <span class="hint">(${r.nMfe})</span></td>
+            <td>${r2(r.maeW)}${r.maeWmax!=null?` <span class="hint">máx ${fmt(r.maeWmax,2)}</span>`:''}</td>
+            <td>${r2(r.maeL)}</td>
+            <td>${r.dolPct==null?'—':fmt(r.dolPct,0)+'% <span class="hint">('+r.nDol+')</span>'}</td>
+            <td>${r.opt?`<b>1:${fmtTP(r.opt.tp)}</b> <span class="${cls(r.opt.exp)}">${fmtR(r.opt.exp)}</span>`:'<span class="hint">&lt;5 con MFE</span>'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        ${best&&worst&&best.session!==worst.session?`<div class="insight" style="margin-top:12px">Donde mejor se mueve el precio para ti es <b>${best.session}</b>: con TP en 1:${fmtTP(best.opt.tp)} sacarías ${fmtR(best.opt.exp)} por trade. En <b>${worst.session}</b> el mejor TP posible solo da ${fmtR(worst.opt.exp)}. Si en una sesión el MFE medio es menor, ajusta allí el TP o sé más selectivo.</div>`:''}
+        ${small.length?`<div class="hint" style="margin-top:8px">⚠ Pocos datos en ${small.map(r=>r.session+' ('+r.nMfe+')').join(', ')}: tómalo como orientativo hasta tener 10-15 trades con MFE por sesión.</div>`:''}
+        <div class="hint" style="margin-top:6px">Entre paréntesis, cuántos trades tienen el dato. MAE siempre en positivo. El R:R óptimo usa el mismo método que la tarjeta general (necesita 5+ trades con MFE).</div>`;
       })()}
     </div>
     <div class="card" style="margin-bottom:14px">
@@ -2753,6 +2804,11 @@ function buildAIReport(){
       group(arr,t=>dow(t.date),'día de la semana');
       group(arr,t=>t.moveType?(MOVE_TYPES[t.moveType]||t.moveType):null,'origen del movimiento (CRT)');
       group(arr,t=>EXIT_LABELS[t.exitType]||t.exitType,'tipo de salida');
+    }
+    const sm=sessionMfeMae(arr).filter(r=>r.nMfe||r.nMaeW||r.nMaeL);
+    if(sm.length){
+      L.push('MFE / MAE por sesión:');
+      sm.forEach(r=>L.push(`  - ${r.session}: ${r.n} trades · MFE medio ${num(r.mfe)}R (${r.nMfe}) · MAE ganadores ${num(r.maeW)}R (${r.nMaeW}${r.maeWmax!=null?', máx '+num(r.maeWmax)+'R':''}) · MAE perdedores ${num(r.maeL)}R (${r.nMaeL}) · llega al DOL ${r.dolPct==null?'—':fmt(r.dolPct,0)+'% ('+r.nDol+')'} · R:R óptimo ${r.opt?'1:'+fmtTP(r.opt.tp)+' ('+fmtR(r.opt.exp)+')':'— (menos de 5 con MFE)'}`));
     }
   };
 
