@@ -228,7 +228,7 @@ document.addEventListener('click',e=>{
 
 // Filtro global de fase: 'all' | 'eval' | 'funded'
 let PHASE_FILTER = 'all';
-let MONTH_FILTER = 'all'; // 'all' o 'AAAA-MM' (compartido entre Disciplina y Rendimiento)
+let MONTH_FILTER = []; // meses elegidos 'AAAA-MM'; vacío = todos (compartido entre Disciplina y Rendimiento)
 const MONTH_TABS = ['discipline','performance'];
 
 // Resuelve la fase de un trade a partir de la cuenta asignada
@@ -514,7 +514,7 @@ function render(){
   const showFilter = metricTabs.includes(CURRENT_TAB);
   // filtro por mes (solo Disciplina y Rendimiento)
   const showMonth = MONTH_TABS.includes(CURRENT_TAB);
-  if(showMonth && MONTH_FILTER!=='all') T = T.filter(t=>(t.date||'').startsWith(MONTH_FILTER));
+  if(showMonth && MONTH_FILTER.length) T = T.filter(t=>MONTH_FILTER.includes((t.date||'').slice(0,7)));
   const filterBars = () => showFilter
     ? `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start">${phaseFilterBar()}${showMonth?monthFilterBar():''}</div>`
     : '';
@@ -558,14 +558,19 @@ function monthFilterBar(){
   const base=tradesFiltered();
   const counts={};
   base.forEach(t=>{ const ym=(t.date||'').slice(0,7); if(ym) counts[ym]=(counts[ym]||0)+1; });
-  if(MONTH_FILTER!=='all' && !counts[MONTH_FILTER]) counts[MONTH_FILTER]=0; // mantener visible el mes elegido
+  MONTH_FILTER.forEach(m=>{ if(!counts[m]) counts[m]=0; }); // mantener visibles los meses elegidos
   const months=Object.keys(counts).sort();
   return `<div class="phase-filter" style="flex-wrap:wrap">
-    <button class="phase-btn ${MONTH_FILTER==='all'?'active':''}" onclick="setMonthFilter('all')">Todos los meses <span class="pf-count">${base.length}</span></button>
-    ${months.map(ym=>`<button class="phase-btn ${MONTH_FILTER===ym?'active':''}" onclick="setMonthFilter('${ym}')">${monthLabel(ym)} <span class="pf-count">${counts[ym]}</span></button>`).join('')}
+    <button class="phase-btn ${!MONTH_FILTER.length?'active':''}" onclick="setMonthFilter('all')">Todos los meses <span class="pf-count">${base.length}</span></button>
+    ${months.map(ym=>`<button class="phase-btn ${MONTH_FILTER.includes(ym)?'active':''}" onclick="setMonthFilter('${ym}')" title="Pulsa para añadir o quitar este mes">${monthLabel(ym)} <span class="pf-count">${counts[ym]}</span></button>`).join('')}
   </div>`;
 }
-function setMonthFilter(m){ MONTH_FILTER=m; render(); }
+// Selección múltiple: pulsar un mes lo añade o lo quita; "Todos" limpia la selección
+function setMonthFilter(m){
+  if(m==='all') MONTH_FILTER=[];
+  else MONTH_FILTER = MONTH_FILTER.includes(m) ? MONTH_FILTER.filter(x=>x!==m) : [...MONTH_FILTER, m].sort();
+  render();
+}
 
 function emptyState(){
   return `<div class="empty">
@@ -1078,7 +1083,7 @@ function renderPerformance(v, T){
       <div style="position:relative;height:200px"><canvas id="distChart"></canvas></div>
     </div>
 
-    <div class="grid g-2" style="margin-top:14px">
+    <div class="grid g-2" style="margin-top:14px;margin-bottom:14px">
       <div class="card">
         <h3>Rachas ${helpIcon("streaks")}</h3>
         ${(()=>{
@@ -1328,7 +1333,8 @@ function renderROI(v, T){
       </div>
     </div>
     ${!accts.length?`<div class="empty"><div class="ico">▤</div><p class="hint">Sin cuentas. Añade una de tus firmas (LucidFlex, Topstep, MyFundedFutures, FundedNext...) y las reglas se cargan solas.</p><button class="btn primary" style="margin-top:14px" onclick="openAccountModal()">+ Añadir cuenta</button></div>`:
-    accts.map(a=>{
+    // Orden de las tarjetas: primero las cuentas activas, las quemadas al final (sin cambiar el orden dentro de cada grupo)
+    [...accts].sort((x,y)=>(x.status==='perdida'?1:0)-(y.status==='perdida'?1:0)).map(a=>{
       const spec = planSpec(a.firm, a.plan, a.phase) || {};
       // Trades de esta cuenta. Si la cuenta es funded, solo cuentan los trades
       // hechos en fase funded (los de la eval no suman al balance real).
