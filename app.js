@@ -784,6 +784,30 @@ function renderDiscipline(v, T){
 /* ============================================================
    PERFORMANCE
    ============================================================ */
+// Lista desplegable "Ver trades (N)": cada fila abre la ventana completa del trade.
+// items: [{t, tag, tone}] con tone 'bad' | 'warn' | 'ok' | 'neutral'
+function tradeDrillList(items){
+  if(!items.length) return '';
+  const d=t=>{ const [y,m,dd]=t.date.split('-'); return `${dd}/${m}/${y.slice(2)}`; };
+  const R=x=>x==null||isNaN(x)?'—':fmt(x,2)+'R';
+  return `<details style="margin-top:12px">
+    <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--blue);padding:6px 0;user-select:none">Ver trades (${items.length})</summary>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+      ${items.map(({t,tag,tone})=>{
+        const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
+        const hot=tone==='bad';
+        return `<div onclick="editTrade('${t.id}')" title="Abrir el trade" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:1px solid ${hot?'rgba(255,90,90,.45)':'var(--line)'};border-radius:9px;background:${hot?'rgba(255,90,90,.06)':'transparent'}">
+          <div style="min-width:0">
+            <div style="font-weight:600;font-size:13px">${d(t)} · ${t.symbol||'—'} <span class="hint">${t.session||''}${t.setup?' · '+t.setup.replace('Setup ',''):''}</span></div>
+            <div class="hint" style="margin-top:2px">Realizado ${fmtR(t.realizedR||0)} · TP ${R(t.plannedR)} · MFE ${R(t.mfe)}${errs.length?' · '+errs.join(', '):' · limpio'}</div>
+          </div>
+          <span class="tag ${tone}" style="white-space:nowrap;flex-shrink:0">${tag} ›</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </details>`;
+}
+
 function renderPerformance(v, T){
   v.innerHTML=`
     <div class="section-title">Rendimiento</div>
@@ -895,6 +919,21 @@ function renderPerformance(v, T){
           ${cleanCount?`<div class="insight" style="margin-top:14px"><b>${cleanCount} cierre(s) limpio(s).</b> Seguiste tu plan, así que fueron buenas decisiones — el resultado no cambia eso.${cleanReachedTP?` Como dato neutro: en ${cleanReachedTP} de ellos el precio siguió hasta tu TP. No es un error (decidiste bien), pero si ves un patrón, quizá tu plan de salida se pueda afinar.`:` En ninguno el precio siguió hasta tu TP: cerraste justo a tiempo.`}</div>`:''}
           ${errCount?`<div class="insight ${errReachedTP?'bad':'warn'}" style="margin-top:10px"><b>${errCount} cierre(s) con error marcado.</b> ${errReachedTP?`En ${errReachedTP} el precio llegó a tu TP: te costaron ${fmt(errCostR,1)}R (${fmt$(errCost$)}) por no seguir el plan.`:`El precio no llegó al TP, pero tú marcaste que la decisión no fue limpia — trabájalo igual, el resultado fue suerte.`}</div>`:`<div class="insight" style="margin-top:10px">Ningún cierre manual marcado como error. Todos siguieron tu plan. 🎯</div>`}
         `}
+        ${(()=>{
+          // Lista de los cierres manuales analizados: primero los que costaron dinero
+          const items=manualWins.map(t=>{
+            const err=(t.flags||[]).some(f=>f!=='clean');
+            const hasMfe=t.mfe!=null&&!isNaN(t.mfe);
+            const reached=hasMfe&&t.mfe>=(t.plannedR||0);
+            const left=Math.max(0,(t.plannedR||0)-(t.realizedR||0));
+            if(!hasMfe) return {t,tag:'sin MFE',tone:'neutral',o:4};
+            if(err&&reached) return {t,tag:`con error · llegó a TP · -${fmt(left,2)}R`,tone:'bad',o:0};
+            if(err) return {t,tag:'con error',tone:'warn',o:1};
+            if(reached) return {t,tag:'limpio · llegó a TP',tone:'neutral',o:2};
+            return {t,tag:'limpio',tone:'ok',o:3};
+          }).sort((a,b)=>a.o-b.o || (a.t.date<b.t.date?1:-1));
+          return tradeDrillList(items);
+        })()}
         `;
       })()}
     </div>
@@ -991,6 +1030,20 @@ function renderPerformance(v, T){
           : tpByPlan>tpByImpulse
           ? 'La mayoría los perdiste siguiendo tu plan. No es miedo — es tu REGLA de BE la que es demasiado ajustada. Plantéate mover el BE más tarde o a un nivel con más margen.'
           : 'Están repartidos entre impulso y plan. Ataca las dos cosas: más disciplina para no adelantarte, y revisa si tu nivel de BE es muy ajustado.'}</div>`:withMfe.length?`<div class="insight" style="margin-top:10px">Ninguno de tus BE habría llegado a TP. Moviste bien: el precio no iba a seguir. 👍</div>`:''}
+        ${(()=>{
+          // Lista de los BE: primero los que habrían ido a TP
+          const items=be.map(t=>{
+            const imp=badFlags(t);
+            const hasMfe=t.mfe!=null&&!isNaN(t.mfe);
+            const tp=hasMfe&&t.mfe>=(t.plannedR||0);
+            if(tp&&imp) return {t,tag:`por impulso · habría ido a TP (${fmt(t.plannedR||0,2)}R)`,tone:'bad',o:0};
+            if(tp) return {t,tag:`según plan · habría ido a TP (${fmt(t.plannedR||0,2)}R)`,tone:'bad',o:1};
+            if(imp) return {t,tag:'por impulso',tone:'warn',o:2};
+            if(!hasMfe) return {t,tag:'sin MFE',tone:'neutral',o:4};
+            return {t,tag:'según plan',tone:'ok',o:3};
+          }).sort((a,b)=>a.o-b.o || (a.t.date<b.t.date?1:-1));
+          return tradeDrillList(items);
+        })()}
         `;
       })()}
     </div>
