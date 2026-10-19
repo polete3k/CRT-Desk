@@ -74,6 +74,7 @@ const DEFAULTS = {
   noTradeDays: [],   // {id, date, reason, note}
   propCosts: [],     // {id, date, amount, concept, firm}
   payouts: [],       // {id, date, amount, concept, firm}
+  paperTrades: [],   // trades SIMULADOS (no operados): mismo formato que trades, sin cuenta ni dinero
   firms: null,   // se inicializa desde FIRM_PRESETS la primera vez (así el usuario puede editarlas)
   settings: { riskPerTradePct: 25 },
   meta: { created: Date.now() }
@@ -519,7 +520,7 @@ function render(){
     ? `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start">${phaseFilterBar()}${showMonth?monthFilterBar():''}</div>`
     : '';
   const hasNoTrade=(DB.noTradeDays||[]).length>0;
-  if(CURRENT_TAB!=='roi' && !T.length && !(CURRENT_TAB==='calendar'&&hasNoTrade)){
+  if(CURRENT_TAB!=='roi' && CURRENT_TAB!=='sim' && !T.length && !(CURRENT_TAB==='calendar'&&hasNoTrade)){
     // Hay trades pero ninguno con este filtro (mes / Eval-Funded): no mostrar "aún no hay trades"
     v.innerHTML = filterBars() + (DB.trades.length && showFilter
       ? `<div class="empty"><div class="ico">◴</div><p class="hint">No hay trades con este filtro. Cambia el mes o Eval/Funded.</p></div>`
@@ -532,7 +533,8 @@ function render(){
     performance:renderPerformance,
     roi:renderROI,
     calendar:renderCalendar,
-    journal:renderJournal
+    journal:renderJournal,
+    sim:renderSim
   })[CURRENT_TAB](v, T);
   // prepend filter bar en pestañas de métricas
   if(showFilter){
@@ -791,17 +793,18 @@ function renderDiscipline(v, T){
    ============================================================ */
 // Lista desplegable "Ver trades (N)": cada fila abre la ventana completa del trade.
 // items: [{t, tag, tone}] con tone 'bad' | 'warn' | 'ok' | 'neutral'
-function tradeDrillList(items){
+function tradeDrillList(items, opts={}){
   if(!items.length) return '';
+  const fn=opts.fn||'editTrade';
   const d=t=>{ const [y,m,dd]=t.date.split('-'); return `${dd}/${m}/${y.slice(2)}`; };
   const R=x=>x==null||isNaN(x)?'—':fmt(x,2)+'R';
-  return `<details style="margin-top:12px">
-    <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--blue);padding:6px 0;user-select:none">Ver trades (${items.length})</summary>
+  return `<details style="margin-top:12px" ${opts.open?'open':''}>
+    <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--blue);padding:6px 0;user-select:none">${opts.label||'Ver trades'} (${items.length})</summary>
     <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
       ${items.map(({t,tag,tone})=>{
         const errs=(t.flags||[]).filter(f=>f!=='clean').map(f=>FLAG_LABELS[f]||f);
         const hot=tone==='bad';
-        return `<div onclick="editTrade('${t.id}')" title="Abrir el trade" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:1px solid ${hot?'rgba(255,90,90,.45)':'var(--line)'};border-radius:9px;background:${hot?'rgba(255,90,90,.06)':'transparent'}">
+        return `<div onclick="${fn}('${t.id}')" title="Abrir el trade" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:1px solid ${hot?'rgba(255,90,90,.45)':'var(--line)'};border-radius:9px;background:${hot?'rgba(255,90,90,.06)':'transparent'}">
           <div style="min-width:0">
             <div style="font-weight:600;font-size:13px">${d(t)} · ${t.symbol||'—'} <span class="hint">${t.session||''}${t.setup?' · '+t.setup.replace('Setup ',''):''}</span></div>
             <div class="hint" style="margin-top:2px">Realizado ${fmtR(t.realizedR||0)} · TP ${R(t.plannedR)} · MFE ${R(t.mfe)}${errs.length?' · '+errs.join(', '):' · limpio'}</div>
@@ -811,6 +814,107 @@ function tradeDrillList(items){
       }).join('')}
     </div>
   </details>`;
+}
+
+/* ============================================================
+   SIMULADOS — trades que tomarías pero no operas (p. ej. NY)
+   Se guardan en DB.paperTrades y NUNCA cuentan en las estadísticas reales.
+   ============================================================ */
+const NY_SESSION='NY (15:30+)';
+function renderSim(v){
+  const S=[...(DB.paperTrades||[])].sort((a,b)=> a.date<b.date?1:-1);
+  const R=DB.trades||[];
+  const wrT=arr=>arr.some(t=>t.result==='win'||t.result==='loss')?fmt(winrate(arr),0)+'%':'—';
+  const expT=arr=>arr.length?fmtR(expectancy(arr)):'—';
+  const pfT=arr=>{ if(!arr.length) return '—'; const p=profitFactor(arr); return p===Infinity?'∞':fmt(p,2); };
+  const mfeT=arr=>{ const m=arr.filter(t=>t.mfe!=null&&!isNaN(t.mfe)).map(t=>Math.max(0,t.mfe)); return m.length?fmt(m.reduce((a,b)=>a+b,0)/m.length,2)+'R':'—'; };
+  const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <div class="section-title" style="margin:0">Trades simulados 🧪</div>
+      <button class="btn primary sm" onclick="openSimModal()">+ Simulado</button>
+    </div>
+    <div class="insight" style="margin-bottom:14px">Apunta aquí los setups que <b>habrías tomado</b> pero no operas (por ejemplo en NY), con el resultado que habrían tenido siguiendo tu plan. No cuentan en tus estadísticas reales, cuentas, calendario ni ROI. Sirve para saber si una sesión o un setup tiene ventaja <b>antes</b> de arriesgar dinero.</div>`;
+  if(!S.length){
+    v.innerHTML=head+`<div class="empty"><div class="ico">🧪</div><p class="hint">Aún no tienes trades simulados. Pulsa <b>+ Simulado</b> y apunta el próximo setup de NY que veas: fecha, checklist, R planificado, cómo habría acabado, MFE y MAE.</p><button class="btn primary" style="margin-top:14px" onclick="openSimModal()">+ Simulado</button></div>`;
+    return;
+  }
+  const sNY=S.filter(t=>t.session===NY_SESSION), rNY=R.filter(t=>t.session===NY_SESSION);
+  const rows=[
+    ['Simulados (todos)',S],['Simulados NY',sNY],['Reales NY',rNY],['Reales (todos)',R]
+  ];
+  const o=optimalRR(S);
+  const withPlan=S.filter(t=>t.planChecked!=null);
+  const full=withPlan.filter(t=>planComplete(t)), partial=withPlan.filter(t=>!planComplete(t));
+  const dol=S.filter(t=>(t.dolReached==='yes'||t.dolReached==='no')&&t.result!=='loss');
+  const sess=sessionMfeMae(S).filter(r=>r.n);
+  // veredicto NY
+  let verdict='';
+  if(sNY.length){
+    const eS=expectancy(sNY), eR=rNY.length?expectancy(rNY):null;
+    const few=sNY.length<20;
+    verdict=`<div class="insight ${eS>0?'':'warn'}" style="margin-top:12px">
+      En NY simulado llevas <b>${sNY.length} trades</b> con expectancy <b>${fmtR(eS)}</b>${eR!=null?` (en real NY: ${fmtR(eR)} en ${rNY.length} trades)`:''}.
+      ${few?` ⚠ Aún son pocos: espera a tener <b>20-30 simulados de NY</b> antes de decidir si vuelves a operarla.`
+        : eS>0.15?' Con esta muestra, la sesión muestra ventaja siguiendo tu plan. Si la diferencia con tu NY real es grande, el problema en real era la ejecución, no la sesión.'
+        : eS>0?' Ventaja pequeña: positivo, pero ajustado. Sigue acumulando antes de arriesgar dinero.'
+        : ' Ni siguiendo el plan sale positivo: de momento NY no compensa para tu operativa.'}
+    </div>`;
+  }
+  v.innerHTML=head+`
+    <div class="grid g-4" style="margin-bottom:14px">
+      ${statCard('Simulados', S.length, sNY.length+' de NY')}
+      ${statCard('Expectancy', expT(S), 'por trade simulado', cls(expectancy(S)))}
+      ${statCard('Win rate', wrT(S), 'sin contar BE')}
+      ${statCard('Profit factor', pfT(S), 'R total '+fmtR(totalR(S)))}
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Simulado vs real</h3>
+      <div class="table-wrap" style="border:none"><table style="min-width:auto">
+        <thead><tr><th></th><th>N</th><th>Exp</th><th>WR</th><th>PF</th><th>R total</th><th>MFE medio</th></tr></thead>
+        <tbody>${rows.map(([k,a])=>`<tr>
+          <td style="font-family:var(--sans);font-weight:600">${k}</td>
+          <td>${a.length}</td>
+          <td class="${a.length?cls(expectancy(a)):''}">${expT(a)}</td>
+          <td>${wrT(a)}</td>
+          <td>${pfT(a)}</td>
+          <td class="${a.length?cls(totalR(a)):''}">${a.length?fmtR(totalR(a)):'—'}</td>
+          <td>${mfeT(a)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      ${verdict}
+    </div>
+    <div class="grid g-2" style="margin-bottom:14px">
+      <div class="card">
+        <h3>TP y DOL en simulados</h3>
+        ${o.enough?`<div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R:R ÓPTIMO (SEGÚN MFE)</div><div class="big pos">1:${fmtTP(o.best.tp)}</div><div class="hint" style="margin-top:4px">exp ${fmtR(o.best.exp)} · TP alcanzado ${fmt(o.best.wr,0)}% · ${o.n} con MFE</div></div>`:`<p class="hint">Necesitas 5+ simulados con MFE para el R:R óptimo (llevas ${o.n}).</p>`}
+        <div class="hint" style="margin-top:10px">${dol.length?`Llega al DOL: <b>${fmt(dol.filter(t=>t.dolReached==='yes').length/dol.length*100,0)}%</b> (${dol.length} no perdedores con dato) · `:''}MFE medio: <b>${mfeT(S)}</b>${o.avgDol!=null?` · DOL medio ${fmt(o.avgDol,2)}R`:''}</div>
+      </div>
+      <div class="card">
+        <h3>¿Habrías seguido el plan?</h3>
+        <div class="hint">Plan completo: <b>${full.length}</b> (exp ${expT(full)}, WR ${wrT(full)})</div>
+        <div class="hint" style="margin-top:4px">Plan incompleto: <b>${partial.length}</b> (exp ${expT(partial)}, WR ${wrT(partial)})</div>
+        <div class="hint" style="margin-top:10px">Apunta también los setups que no cumplen todo el checklist: así ves si respetar el plan marca la diferencia en esa sesión.</div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Por sesión y setup</h3>
+      <div class="table-wrap" style="border:none"><table style="min-width:auto">
+        <thead><tr><th>Sesión</th><th>N</th><th>Exp</th><th>MFE medio</th><th>MAE ganadores</th><th>R:R óptimo</th></tr></thead>
+        <tbody>${sess.map(r=>`<tr>
+          <td style="font-family:var(--sans);font-weight:600">${r.session}</td>
+          <td>${r.n}</td>
+          <td class="${cls(r.exp)}">${fmtR(r.exp)}</td>
+          <td>${r.mfe==null?'—':fmt(r.mfe,2)+'R'}</td>
+          <td>${r.maeW==null?'—':fmt(r.maeW,2)+'R'}</td>
+          <td>${r.opt?'1:'+fmtTP(r.opt.tp)+' ('+fmtR(r.opt.exp)+')':'<span class="hint">&lt;5 con MFE</span>'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div style="margin-top:12px">${breakdownTable(breakdown(S,'setup'))}</div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Lista de simulados</h3>
+      ${tradeDrillList(S.map(t=>({t,tag:t.result==='win'?'ganador':t.result==='loss'?'perdedor':'BE',tone:t.result==='win'?'ok':t.result==='loss'?'bad':'neutral'})),{open:true,fn:'editSim',label:'Simulados'})}
+    </div>
+  `;
 }
 
 function renderPerformance(v, T){
@@ -1660,18 +1764,21 @@ function calDayDetail(dateStr){
       <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">R TOTAL</div><div class="big ${cls(dR)}">${fmtR(dR)}</div></div>
       <div class="calc-out"><div class="label" style="font-size:10px;color:var(--ink-faint)">TRADES</div><div class="big">${dayTrades.length}</div></div>
     </div>
-    ${dayTrades.map(t=>{
+    ${(()=>{ const shownG=new Set(); return dayTrades.map(t=>{
       const errs=(t.flags||[]).filter(f=>f!=='clean');
+      const nCp=copySiblings(t).length;
+      // capturas una sola vez por grupo de copias
+      const showImg=!t.copyGroup||!shownG.has(t.copyGroup); if(t.copyGroup) shownG.add(t.copyGroup);
       return `<div class="card" style="padding:12px;margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <div><b>${t.symbol}</b> <span class="hint">${t.setup} · ${t.session}</span></div>
+          <div><b>${t.symbol}</b> <span class="hint">${t.setup} · ${t.session}${t.account?' · '+t.account:''}${nCp?` · ⧉ copia (${nCp+1} cuentas)`:''}</span></div>
           <div style="font-family:var(--mono);font-weight:700" class="${cls(t.realizedR)}">${fmtR(t.realizedR)} · ${fmt$(t.pnl)}</div>
         </div>
         ${errs.length?`<div style="margin-top:6px">${errs.map(f=>`<span class="tag bad" style="margin:1px">${FLAG_LABELS[f]||f}</span>`).join('')}</div>`:''}
         ${t.note?`<div class="hint" style="margin-top:6px">${t.note}</div>`:''}
-        ${(t.images&&t.images.length)?`<div class="thumb-row">${t.images.map(img=>`<img class="thumb" src="${img}" onclick="lightbox('${img}')">`).join('')}</div>`:''}
+        ${showImg&&tradeImgs(t).length?`<div class="thumb-row">${tradeImgs(t).map(img=>`<img class="thumb" src="${img}" onclick="lightbox('${img}')">`).join('')}</div>`:''}
       </div>`;
-    }).join('')||'<p class="hint">Sin trades este día.</p>'}
+    }).join(''); })()||'<p class="hint">Sin trades este día.</p>'}
     <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Cerrar</button></div>
   </div>`;
   $('#modalBg').classList.add('show');
@@ -1704,7 +1811,7 @@ function renderJournal(v, T){
         const errs=(t.flags||[]).filter(f=>f!=='clean');
         return `<tr>
           <td>${t.date}</td>
-          <td>${t.symbol||'—'}${(t.images&&t.images.length)?` <span title="${t.images.length} imagen(es)" style="opacity:.6">📎</span>`:''}</td>
+          <td>${t.symbol||'—'}${tradeImgs(t).length?` <span title="${tradeImgs(t).length} imagen(es)" style="opacity:.6">📎</span>`:''}${copySiblings(t).length?` <span class="hint" title="Mismo trade copiado en: ${copySiblings(t).map(x=>(x.account||'sin cuenta').replace(/"/g,'&quot;')).join(', ')}">⧉${copySiblings(t).length+1}</span>`:''}</td>
           <td style="font-family:var(--sans)">${t.setup||'—'}</td>
           <td>${t.session||'—'}</td>
           <td>${fmt(t.plannedR,1)}</td>
@@ -1923,6 +2030,51 @@ function modalPhase(){
   const acc=DB.accounts.find(a=>a.name===$('#f_account')?.value);
   return acc ? (acc.phase==='Funded'?'funded':'eval') : '';
 }
+/* ---------- COPIAS: un mismo trade en varias cuentas ----------
+   Cada copia es un trade propio en DB.trades (cuenta como un trade más en todas las estadísticas),
+   con su cuenta, fase, riesgo y P&L. Comparten copyGroup y se sincronizan al editar. */
+function accPhaseOf(name){ const a=DB.accounts.find(x=>x.name===name); return a?(a.phase==='Funded'?'funded':'eval'):''; }
+function copySiblings(t){ return (t&&t.copyGroup)?(DB.trades||[]).filter(x=>x.copyGroup===t.copyGroup&&x.id!==t.id):[]; }
+// Las capturas se guardan una sola vez por grupo (no se duplican en el almacenamiento)
+function tradeImgs(t){
+  if(t&&t.images&&t.images.length) return t.images;
+  const h=copySiblings(t).find(x=>x.images&&x.images.length);
+  return h?h.images:[];
+}
+// Copias marcadas en el formulario: [{acc, risk, pnl}]
+function modalCopies(){
+  const prim=$('#f_account')?.value||'';
+  return $$('#f_copies .copy-row').filter(r=>{
+    const c=r.querySelector('.copy-chk'); return c&&c.checked;
+  }).map(r=>{
+    const acc=DB.accounts.find(a=>a.id===r.dataset.accid);
+    const risk=parseFloat(r.querySelector('.copy-risk')?.value);
+    const pnl=parseFloat(r.querySelector('.copy-pnl')?.value);
+    return {acc, risk:isNaN(risk)?0:risk, pnl};
+  }).filter(c=>c.acc && c.acc.name!==prim);
+}
+// Fase con la que se pinta la checklist: si alguna cuenta del grupo es fondeada,
+// aparece también la regla de fondeadas (solo cuenta para esas cuentas).
+function checklistPhase(){
+  const p=modalPhase();
+  if(TRADE_MODE==='sim'||p==='funded') return p;
+  const sibs=($('#modalBg')?._copySibIds||[]).map(id=>DB.trades.find(x=>x.id===id)).filter(Boolean);
+  const anyFunded=sibs.some(s=>tradePhase(s)==='funded')||modalCopies().some(c=>c.acc.phase==='Funded');
+  return anyFunded?'funded':p;
+}
+function onCopyToggle(){
+  const prim=$('#f_account')?.value||'';
+  $$('#f_copies .copy-row').forEach(r=>{
+    const acc=DB.accounts.find(a=>a.id===r.dataset.accid);
+    const isPrim=acc&&acc.name===prim;
+    r.style.display=isPrim?'none':'';
+    const c=r.querySelector('.copy-chk');
+    if(isPrim&&c) c.checked=false;
+    const f=r.querySelector('.copy-fields');
+    if(f) f.style.display=(c&&c.checked)?'':'none';
+  });
+  rebuildChecklist();
+}
 // Calcula el setup automático según fallos: 0=A+, 1=A, 2=B, 3+=C
 function autoSetup(checkedCount, total){
   const fails = total - checkedCount;
@@ -1954,7 +2106,11 @@ const MOVE_TYPES={
   other:'Otro momento'
 };
 
-function openTradeModal(){ tradeModal(); }
+// Modo del formulario de trade: 'real' (DB.trades) o 'sim' (DB.paperTrades, trades simulados no operados)
+let TRADE_MODE='real';
+function openTradeModal(){ TRADE_MODE='real'; tradeModal(); }
+function openSimModal(){ TRADE_MODE='sim'; tradeModal(); }
+function editSim(id){ TRADE_MODE='sim'; tradeModal((DB.paperTrades||[]).find(t=>t.id===id)); }
 
 /* ---------- Dia sense trade ---------- */
 function openNoTradeModal(existing){
@@ -2079,14 +2235,37 @@ function editNoTrade(id){
   const nt=(DB.noTradeDays||[]).find(d=>d.id===id);
   if(nt) openNoTradeModal(nt);
 }
-function editTrade(id){ tradeModal(DB.trades.find(t=>t.id===id)); }
+function editTrade(id){ TRADE_MODE='real'; tradeModal(DB.trades.find(t=>t.id===id)); }
 
 function tradeModal(t){
   const e=t||{};
   const flags=e.flags||['clean'];
-  const planChecked=e.planChecked||[];
+  const SIM=TRADE_MODE==='sim';
+  const sibs=SIM?[]:copySiblings(e);
+  // Si alguna copia es fondeada y esta no, recupera la regla extra de fondeadas de esa copia
+  let planChecked=[...(e.planChecked||[])];
+  if(sibs.length && tradePhase(e)!=='funded'){
+    const baseLen=planChecklist(e.entryType||'manipulacion','eval').length;
+    const fs=sibs.find(x=>tradePhase(x)==='funded');
+    if(fs) (fs.planChecked||[]).forEach(i=>{ if(i>=baseLen && !planChecked.includes(i)) planChecked.push(i); });
+  }
+  const defSession=e.session||(SIM?'NY (15:30+)':'');
+  const sibNames=sibs.map(x=>x.account);
+  const copyAccts=SIM?[]:DB.accounts.filter(a=>a.status!=='perdida' && !sibNames.includes(a.name));
+  const defRisk=e.riskUSD??200;
+  const copyHTML=SIM?'':`<div class="field" id="f_copyWrap"><label>${sibs.length?'Copias de este trade':'¿Lo tomaste también en otras cuentas?'} <span class="hint">cada cuenta cuenta como un trade</span></label>
+      ${sibs.length?`<div class="hint" style="margin-bottom:8px">⧉ Este trade también está en: ${sibs.map(x=>`<a href="#" onclick="event.preventDefault();editTrade('${x.id}')"><b>${x.account||'sin cuenta'}</b></a> (riesgo ${fmt$(x.riskUSD||0)}, P&L ${fmt$(x.pnl||0)})`).join(' · ')}.<br>Al guardar, los cambios se copian a todas (menos cuenta, fase, riesgo y P&L, que son de cada una). Para cambiar el riesgo o P&L de otra cuenta, ábrela desde el enlace.</div>`:''}
+      ${copyAccts.length?`<div id="f_copies" style="display:flex;flex-direction:column;gap:6px">${copyAccts.map(a=>`<div class="copy-row" data-accid="${a.id}" style="${a.name===e.account?'display:none':''}">
+        <label style="display:flex;align-items:center;gap:8px;font-weight:500;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" class="copy-chk" onchange="onCopyToggle()" style="width:auto"> ${sibs.length?'Añadir a ':''}${a.name} <span class="hint">${a.phase==='Funded'?'(fondeada)':'(eval)'}</span></label>
+        <div class="copy-fields field-row" style="display:none;margin:6px 0 4px 26px">
+          <div class="field" style="margin:0"><label>Riesgo ($)</label><input type="number" class="copy-risk" value="${defRisk}"></div>
+          <div class="field" style="margin:0"><label>P&L ($) <span class="hint">vacío = auto</span></label><input type="number" class="copy-pnl" placeholder="auto"></div>
+        </div>
+      </div>`).join('')}</div>`:`<div class="hint">No hay más cuentas activas${sibs.length?' para añadir':''}.</div>`}
+    </div>`;
   $('#modalBg').innerHTML=`<div class="modal">
-    <h2>${t?'Editar trade':'Nuevo trade'} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    <h2>${SIM?(t?'Editar trade simulado':'Nuevo trade simulado'):(t?'Editar trade':'Nuevo trade')} <button class="btn ghost sm icon" onclick="closeModal()">✕</button></h2>
+    ${SIM?`<div class="insight warn" style="margin-bottom:14px">🧪 <b>Trade simulado</b>: el setup que habrías tomado pero no operaste. Apunta el resultado que habría tenido siguiendo tu plan. No cuenta en tus estadísticas reales, cuentas ni calendario.</div>`:''}
     <div class="field"><label>Tipo de entrada</label>
       <select id="f_entryType" onchange="rebuildChecklist()">
         <option value="manipulacion" ${(e.entryType||'manipulacion')==='manipulacion'?'selected':''}>Manipulación</option>
@@ -2105,7 +2284,7 @@ function tradeModal(t){
     </div>
     <div class="field-row">
       <div class="field"><label>Setup <span class="hint" id="f_setupAuto"></span></label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
-      <div class="field"><label>Sesión</label><select id="f_session">${SESSIONS.map(s=>`<option ${e.session===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>Sesión</label><select id="f_session">${SESSIONS.map(s=>`<option ${defSession===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>¿Dónde empezó el movimiento? <span class="hint">estructura CRT</span></label>
       <select id="f_moveType" onchange="toggleMoveOther()">
@@ -2128,6 +2307,7 @@ function tradeModal(t){
         </select>
       </div>
     </div>
+    ${copyHTML}
     <div class="field-row-3">
       <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
       <div class="field"><label>R realizado <span class="hint">lo que sacaste</span></label><input type="number" id="f_realizedR" step="0.1" value="${e.realizedR??''}" oninput="onRealizedRChange()" placeholder="-1 / 0 / 1.5"></div>
@@ -2186,9 +2366,20 @@ function tradeModal(t){
     </div>
   </div>`;
   $('#modalBg').classList.add('show');
+  if(SIM){
+    // Simulado: sin cuenta, fase, riesgo, P&L ni flags de ejecución
+    const hide=el=>{ if(el&&el.style) el.style.display='none'; };
+    hide($('#f_account')?.closest?.('.field-row'));
+    hide($('#f_riskUSD')?.closest?.('.field'));
+    hide($('#f_pnl')?.closest?.('.field'));
+    hide($('#f_flags')?.closest?.('.field'));
+    hide($('#f_resultPreview'));
+  }
   $('#modalBg')._flags=[...flags];
-  $('#modalBg')._images=[...(e.images||[])];
+  $('#modalBg')._images=[...(SIM?(e.images||[]):tradeImgs(e))];
   $('#modalBg')._planChecked=[...planChecked];
+  $('#modalBg')._planCheckedOrig=[...planChecked];
+  $('#modalBg')._copySibIds=sibs.map(x=>x.id);
   // Si el trade ya tenía un setup guardado, lo respetamos: no se recalcula solo al abrir.
   // Los trades antiguos conservan su setup aunque se añadan reglas nuevas después.
   $('#modalBg')._setupManual=!!(e.setup);
@@ -2205,18 +2396,21 @@ function tradeModal(t){
 function rebuildChecklist(initial){
   const box=$('#f_plan'); if(!box) return;
   const type=$('#f_entryType')?.value||'manipulacion';
-  const list=planChecklist(type, modalPhase());
+  const cPhase=checklistPhase();
+  const list=planChecklist(type, cPhase);
+  const ownLen=planChecklist(type, modalPhase()).length;
   const saved=$('#modalBg')?._planChecked||[];
   box.innerHTML=list.map((rule,i)=>`<label class="plan-item">
     <input type="checkbox" data-plan="${i}" ${saved.includes(i)?'checked':''}>
-    <span>${rule}</span>
+    <span>${rule}${i>=ownLen?' <span class="hint">(solo cuenta en las copias fondeadas)</span>':''}</span>
   </label>`).join('');
   // Muestra el conteo y (si procede) recalcula el setup automático.
   // recalc=true solo cuando el usuario marca/desmarca una casilla o cambia el tipo de entrada.
   const update=(recalc)=>{
     const checks=$$('#f_plan input[type=checkbox]');
-    const checked=checks.filter(c=>c.checked).length;
-    const total=list.length;
+    // El conteo y el setup son los de ESTA cuenta (la regla extra de fondeadas solo afecta a esas copias)
+    const checked=checks.filter((c,i)=>c.checked&&i<ownLen).length;
+    const total=ownLen;
     $('#modalBg')._planChecked=checks.map((c,i)=>c.checked?i:-1).filter(i=>i>=0);
     const el=$('#f_planCount');
     if(el) el.innerHTML=`<span class="${checked===total?'pos':checked>=total-1?'':'neg'}">${checked}/${total} reglas cumplidas</span>${checked<total?' — revisa antes de entrar':' ✓ todas cumplidas'}`;
@@ -2288,7 +2482,8 @@ function onAccountChange(){
   const acc=DB.accounts.find(a=>a.name===$('#f_account')?.value);
   const ph=$('#f_phase');
   if(acc && ph && !ph.value){ ph.value = acc.phase==='Funded'?'funded':'eval'; }
-  rebuildChecklist(); // la regla de cuentas fondeadas aparece/desaparece según la cuenta
+  if($('#f_copies')) onCopyToggle(); // oculta la cuenta principal de la lista de copias (y redibuja la checklist)
+  else rebuildChecklist(); // la regla de cuentas fondeadas aparece/desaparece según la cuenta
 }
 function onRealizedRChange(){
   const r=parseFloat($('#f_realizedR')?.value);
@@ -2401,17 +2596,26 @@ function toggleFlag(k){
 function saveTrade(id){
   const flags=$('#modalBg')._flags;
   const realizedR=parseFloat($('#f_realizedR').value);
-  const existing=id?DB.trades.find(x=>x.id===id):null;
+  const SIM=TRADE_MODE==='sim';
+  if(SIM) DB.paperTrades=DB.paperTrades||[];
+  const STORE=SIM?DB.paperTrades:DB.trades;
+  const existing=id?STORE.find(x=>x.id===id):null;
   const newChecked=$$('#f_plan input[type=checkbox]').filter(c=>c.checked).map(c=>+c.dataset.plan);
   const newEntryType=$('#f_entryType')?.value||'manipulacion';
   // Si editas un trade antiguo sin tocar su checklist, conserva su nº de reglas original.
   const newPhase=modalPhase();
-  const checklistUntouched = existing && JSON.stringify(existing.planChecked||[])===JSON.stringify(newChecked) && (existing.entryType||'manipulacion')===newEntryType && (existing.phase||'')===(newPhase||'');
+  const origView=$('#modalBg')._planCheckedOrig||existing?.planChecked||[];
+  const checklistUntouched = existing && JSON.stringify([...origView].sort((a,b)=>a-b))===JSON.stringify([...newChecked].sort((a,b)=>a-b)) && (existing.entryType||'manipulacion')===newEntryType && (tradePhase(existing)||'')===(newPhase||'');
+  // Checklist / setup de cada cuenta según su fase (la regla de fondeadas solo cuenta en fondeadas)
+  const setupSel=$('#f_setup').value;
+  const setupAuto=!$('#modalBg')._setupManual;
+  const planFor=ph=>{ const tot=planChecklist(newEntryType,ph).length; const ch=newChecked.filter(i=>i<tot); return {planChecked:ch, planTotal:tot, setup: setupAuto?'Setup '+autoSetup(ch.length,tot):setupSel}; };
+  const own=planFor(newPhase);
   const t={
     id:id||uid(),
     date:$('#f_date').value,
     symbol:$('#f_symbol').value.trim().toUpperCase(),
-    setup:$('#f_setup').value,
+    setup: checklistUntouched ? setupSel : own.setup,
     session:$('#f_session').value,
     moveType:$('#f_moveType').value,
     moveOther:$('#f_moveType').value==='other'?$('#f_moveOther').value.trim():'',
@@ -2435,25 +2639,85 @@ function saveTrade(id){
     flags:[...flags],
     note:$('#f_note').value.trim(),
     images:[...($('#modalBg')._images||[])],
-    planChecked:newChecked,
+    planChecked: checklistUntouched ? (existing.planChecked||[]) : own.planChecked,
     entryType:newEntryType,
-    planTotal: checklistUntouched ? existing.planTotal : planChecklist(newEntryType, newPhase).length
+    planTotal: checklistUntouched ? existing.planTotal : own.planTotal
   };
-  if(id){ const i=DB.trades.findIndex(x=>x.id===id); DB.trades[i]=t; }
-  else DB.trades.push(t);
+  if(SIM){ Object.assign(t,{sim:true,account:'',phase:'',riskUSD:0,pnl:0,flags:['clean'],planChecked:newChecked,planTotal:planChecklist(newEntryType,'').length,setup:setupSel}); }
+  // ---- Copias en otras cuentas (solo trades reales) ----
+  const before=SIM?null:DB.trades.slice();
+  let nSync=0, nNew=0;
+  if(!SIM){
+    const sibs=existing?copySiblings(existing):[];
+    if(t.account && sibs.some(x=>x.account===t.account)){ toast('⚠ Ya hay una copia de este trade en '+t.account+'. Elige otra cuenta.'); return; }
+    const copies=modalCopies().filter(c=>!sibs.some(x=>x.account===c.acc.name));
+    if(existing?.copyGroup) t.copyGroup=existing.copyGroup;
+    if(copies.length && !t.copyGroup) t.copyGroup=uid();
+    // Campos comunes: todo lo del trade salvo cuenta, fase, riesgo, P&L, checklist/setup (por fase) e imágenes
+    const common=x=>{ const c={...x}; ['id','account','phase','riskUSD','pnl','planChecked','planTotal','setup','images','copyGroup'].forEach(k=>delete c[k]); return c; };
+    // Sincroniza las copias existentes (objetos nuevos: si falla el guardado se restaura todo)
+    sibs.forEach(sb=>{
+      const autoPnl=Math.abs((sb.pnl||0)-(sb.realizedR||0)*(sb.riskUSD||0))<0.01;
+      const u={...sb, ...common(t)};
+      u.pnl = autoPnl ? t.realizedR*(sb.riskUSD||0) : sb.pnl;
+      if(checklistUntouched){ if(setupSel!==(existing.setup||'')) u.setup=setupSel; }
+      else Object.assign(u, planFor(tradePhase(sb)));
+      // las capturas del grupo se cargaron en el formulario y ahora viven solo en el trade que editas
+      u.images=[];
+      const i=DB.trades.findIndex(x=>x.id===sb.id); DB.trades[i]=u; nSync++;
+    });
+    copies.forEach(c=>{
+      const ph=c.acc.phase==='Funded'?'funded':'eval';
+      DB.trades.push({...common(t), id:uid(), copyGroup:t.copyGroup, account:c.acc.name, phase:ph,
+        riskUSD:c.risk, pnl: isNaN(c.pnl) ? t.realizedR*c.risk : c.pnl, images:[], ...planFor(ph)});
+      nNew++;
+    });
+  }
+  if(id){ const i=STORE.findIndex(x=>x.id===id); STORE[i]=t; }
+  else STORE.push(t);
   try{
     save();
   }catch(err){
     // localStorage lleno (probablemente por imágenes)
     toast('⚠ Almacenamiento lleno. Quita alguna imagen o exporta y limpia datos antiguos.');
-    if(!id) DB.trades.pop();
+    if(SIM){ if(!id) STORE.pop(); }
+    else DB.trades=before;
     return;
   }
   closeModal(); render();
-  if(id){ toast('Trade actualizado'); }
-  else { showMantra(processMantra(t)); }
+  const cp=(nSync?` · ${nSync} copia${nSync>1?'s':''} sincronizada${nSync>1?'s':''}`:'')+(nNew?` · añadido a ${nNew} cuenta${nNew>1?'s':''} más`:'');
+  if(SIM){ toast(id?'Simulado actualizado':'Trade simulado guardado'); }
+  else if(id){ toast('Trade actualizado'+cp); }
+  else { showMantra(processMantra(t)); if(nNew) toast(`Trade guardado en ${nNew+1} cuentas`); }
 }
 function deleteTrade(id){
+  if(TRADE_MODE==='sim'){
+    if(!confirm('¿Eliminar este trade simulado?'))return;
+    DB.paperTrades=(DB.paperTrades||[]).filter(t=>t.id!==id); save(); closeModal(); render(); toast('Simulado eliminado');
+    return;
+  }
+  const tr=DB.trades.find(t=>t.id===id);
+  const sibs=copySiblings(tr);
+  if(sibs.length){
+    const names=sibs.map(x=>x.account||'sin cuenta').join(', ');
+    if(confirm(`Este trade también está copiado en: ${names}.\n\nAceptar → eliminar el trade de TODAS las cuentas (${sibs.length+1}).\nCancelar → elegir otra opción.`)){
+      const g=tr.copyGroup;
+      DB.trades=DB.trades.filter(t=>t.copyGroup!==g); save(); closeModal(); render(); toast(`Trade eliminado de ${sibs.length+1} cuentas`);
+      return;
+    }
+    if(!confirm(`¿Eliminar solo la copia de ${tr.account||'esta cuenta'}? (se mantiene en ${names})`)) return;
+    // Las capturas del grupo no se pierden: pasan a otra copia
+    const imgs=(tr.images&&tr.images.length)?tr.images:null;
+    DB.trades=DB.trades.filter(t=>t.id!==id).map(t=>{
+      if(t.copyGroup!==tr.copyGroup) return t;
+      let u=t;
+      if(imgs && t.id===sibs[0].id) u={...u, images:imgs};
+      if(sibs.length===1){ u={...u}; delete u.copyGroup; }
+      return u;
+    });
+    save(); closeModal(); render(); toast('Copia eliminada');
+    return;
+  }
   if(!confirm('¿Eliminar este trade?'))return;
   DB.trades=DB.trades.filter(t=>t.id!==id); save(); closeModal(); render(); toast('Trade eliminado');
 }
@@ -2784,13 +3048,17 @@ function buildAIReport(){
   const STATUS_LABELS={en_curso:'En curso',pasada:'Pasada',fondeada:'Fondeada',payout:'Con payout',perdida:'Perdida (quemada)'};
   const months=[...new Set(T.map(t=>t.date.slice(0,7)).concat(NT.map(n=>n.date.slice(0,7))))].sort();
   const line=()=>L.push('');
+  // Copias: un mismo trade tomado en varias cuentas (cada copia cuenta como un trade)
+  const tIdx=new Map(T.map((t,i)=>[t.id,i]));
+  const uniqN=arr=>new Set(arr.map(t=>t.copyGroup||t.id)).size;
+  const copiedN=arr=>arr.filter(t=>t.copyGroup&&copySiblings(t).length).length;
 
   // ---------- Bloque de estadísticas (se usa para el total y para cada mes) ----------
   const statsBlock=(arr)=>{
     if(!arr.length){ L.push('Sin trades.'); return; }
     const W=arr.filter(t=>t.result==='win'), Ls=arr.filter(t=>t.result==='loss'), B=arr.filter(t=>t.result==='be');
     const risks=arr.map(t=>t.riskUSD).filter(x=>x>0);
-    L.push(`Trades: ${arr.length} (${W.length} ganadores, ${Ls.length} perdedores, ${B.length} BE) · días operados: ${new Set(arr.map(t=>t.date)).size}`);
+    L.push(`Trades: ${arr.length} (${W.length} ganadores, ${Ls.length} perdedores, ${B.length} BE) · días operados: ${new Set(arr.map(t=>t.date)).size}${uniqN(arr)!==arr.length?` · decisiones únicas: ${uniqN(arr)} (${copiedN(arr)} registros son copias del mismo trade en varias cuentas)`:''}`);
     L.push(`Expectancy: ${fmtR(expectancy(arr))} por trade · Win rate: ${wrT(arr)} · Profit factor: ${pfTxt(arr)}`);
     L.push(`Avg win: ${fmtR(avgWin(arr))} · Avg loss: ${fmtR(avgLoss(arr))} · R total: ${fmtR(totalR(arr))} · P&L: ${fmt$(totalPnl(arr))} · Riesgo medio por trade: ${risks.length?fmt$(risks.reduce((a,b)=>a+b,0)/risks.length):'—'}`);
     const st=streaks(arr);
@@ -2887,7 +3155,7 @@ function buildAIReport(){
 
   // =================== CABECERA E INSTRUCCIONES ===================
   L.push('=== INFORME COMPLETO DEL JOURNAL DE TRADING — CRT DESK (FUTUROS) ===');
-  L.push(`Exportado: ${todayISO()} · Periodo: ${T.length?T[0].date+' → '+T[T.length-1].date:'sin trades'} · ${T.length} trades · ${NT.filter(n=>(n.type||'noday')==='noday').length} días sin operar · ${NT.filter(n=>n.type==='unfilled').length} entradas no ejecutadas`);
+  L.push(`Exportado: ${todayISO()} · Periodo: ${T.length?T[0].date+' → '+T[T.length-1].date:'sin trades'} · ${T.length} trades${uniqN(T)!==T.length?` (${uniqN(T)} decisiones únicas: hay trades copiados en varias cuentas)`:''} · ${NT.filter(n=>(n.type||'noday')==='noday').length} días sin operar · ${NT.filter(n=>n.type==='unfilled').length} entradas no ejecutadas`);
   L.push('Trader: opera futuros intradía (MNQ, MES, MYM...) con metodología CRT (Candle Range Theory) en prop firms (evaluaciones y cuentas fondeadas).');
   line();
   L.push('## 0. CÓMO LEER ESTE INFORME');
@@ -2905,6 +3173,8 @@ function buildAIReport(){
   L.push('- R:R óptimo: para cada TP de 0,25R a 4R, si el MFE llegó → +TP; si no llegó y tocó el SL (perdedor o MAE ≥ 1) → -1R; si no llegó a ninguno (BE, cierre manual) → 0R. El óptimo es el TP con mayor expectancy simulada.');
   L.push('- Checklist de trades antiguos: si un trade no tiene registrado su total de reglas, sus reglas cumplidas se muestran con el texto de la checklist ACTUAL. El orden de las reglas es el mismo, pero alguna tenía otra redacción entonces (p. ej. "rangos LTF 8h-2h" en vez de "12h-1h", o "no tener rango contrario cerca"). Para esos trades, el setup guardado indica cuántas reglas falló (A+ = ninguna).');
   L.push('- "—" significa sin datos (no cero).');
+  L.push('- Trades simulados (sección 6, identificados como [S1], [S2]...): no operados, resultado hipotético. No mezclarlos con los reales ([T1], [T2]...).');
+  L.push('- Copias (⧉): cuando el trader toma el MISMO trade en varias cuentas, se registra una vez por cuenta y en las estadísticas cuenta como un trade por cuenta (así lo ha decidido el trader). Cada copia indica con qué otros [T#] comparte decisión; las "decisiones únicas" del bloque de estadísticas son los trades sin duplicar. Para analizar el proceso de decisión (win rate real del setup, errores, disciplina) ten en cuenta que una misma decisión pesa tantas veces como cuentas.');
   L.push('- Muestras pequeñas (sobre todo en meses sueltos) dan métricas poco fiables; tenlo en cuenta al sacar conclusiones.');
   line();
   L.push('Checklists vigentes:');
@@ -2975,9 +3245,11 @@ function buildAIReport(){
 
   // =================== 4. TODOS LOS TRADES ===================
   L.push('## 4. DETALLE DE CADA TRADE (orden cronológico)');
-  T.forEach((t,i)=>{
+  const tradeDetail=(t,i,pre)=>{
     const ph=tradePhase(t);
-    L.push(`[T${i+1}] ${t.date} (${dow(t.date)}) · ${t.symbol||'—'} · cuenta: ${t.account||'sin cuenta'} · fase: ${ph==='funded'?'FUNDED':ph==='eval'?'EVAL':'—'}`);
+    L.push(`[${pre}${i+1}] ${t.date} (${dow(t.date)}) · ${t.symbol||'—'} · cuenta: ${t.account||'sin cuenta'} · fase: ${ph==='funded'?'FUNDED':ph==='eval'?'EVAL':'—'}`);
+    const cs=pre==='T'?copySiblings(t):[];
+    if(cs.length) L.push(`  ⧉ COPIA: es el mismo trade (misma entrada y misma decisión) que ${cs.map(x=>`[T${tIdx.get(x.id)+1}] (cuenta ${x.account||'sin cuenta'})`).join(', ')}. Solo cambian cuenta, riesgo y P&L.`);
     L.push(`  Tipo de entrada: ${ENTRY_TYPE_LABELS[t.entryType]||'no registrado (trade antiguo)'} · Setup: ${(t.setup||'—').replace('Setup ','')} · Sesión: ${t.session||'—'}${t.moveType?` · Origen del movimiento: ${MOVE_TYPES[t.moveType]||t.moveType}${t.moveOther?' ('+t.moveOther+')':''}`:''}`);
     if(t.planChecked!=null){
       const list=planChecklist(t.entryType, tradePhase(t));
@@ -2996,7 +3268,8 @@ function buildAIReport(){
     const ds=tradeDiscScore(t);
     L.push(`  Flags: ${errs.length?errs.map(f=>FLAG_LABELS[f]||f).join(', '):'limpio'}${errs.length?` · coste del error: ${fmtR(-tradeErrorCost(t)||0)}`:''} · nota de disciplina: ${ds==null?'—':discStyle(ds).label}${t.smt==='yes'?` · SMT (dato antiguo): ${t.smtResult}/${t.smtTiming}`:''}${(t.images&&t.images.length)?` · ${t.images.length} captura(s) no incluidas`:''}`);
     if(t.note) L.push(`  Nota del trader: ${t.note.replace(/\s*\n\s*/g,' ')}`);
-  });
+  };
+  T.forEach((t,i)=>tradeDetail(t,i,'T'));
   line();
 
   // =================== 5. DÍAS SIN OPERAR ===================
@@ -3006,6 +3279,20 @@ function buildAIReport(){
       const noday=(n.type||'noday')==='noday';
       L.push(`- ${n.date} (${dow(n.date)}) · ${noday?'Día sin operar':'Entrada no ejecutada'}${n.reason?' · motivo: '+(NOTRADE_REASONS[n.reason]||n.reason):''}${noday?' · ¿siguió el plan?: '+(n.planFollowed==='yes'?'sí':n.planFollowed==='no'?'no':'sin marcar'):''}${n.note?' · nota: '+n.note.replace(/\s*\n\s*/g,' '):''}`);
     });
+    line();
+  }
+  // =================== 6. TRADES SIMULADOS ===================
+  const S=[...(DB.paperTrades||[])].sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0);
+  if(S.length){
+    L.push('## 6. TRADES SIMULADOS (NO OPERADOS)');
+    L.push('Setups que el trader habría tomado pero NO operó (sobre todo en la sesión de NY, que no opera en real). Resultado hipotético siguiendo su plan. NO están incluidos en ninguna estadística de las secciones 1-5. Sirven para evaluar si una sesión/setup tiene ventaja antes de arriesgar dinero.');
+    const sNY=S.filter(t=>t.session==='NY (15:30+)'), rNY=T.filter(t=>t.session==='NY (15:30+)');
+    L.push(`Comparativa NY: simulados ${sNY.length} trades, exp ${sNY.length?fmtR(expectancy(sNY)):'—'} · reales ${rNY.length} trades, exp ${rNY.length?fmtR(expectancy(rNY)):'—'}`);
+    statsBlock(S);
+    breakdowns(S,true);
+    line();
+    L.push('Detalle de cada trade simulado:');
+    S.forEach((t,i)=>tradeDetail(t,i,'S'));
     line();
   }
   L.push('=== FIN DEL INFORME ===');
