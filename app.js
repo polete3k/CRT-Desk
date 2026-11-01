@@ -1,6 +1,6 @@
 /* ============================================================
    CRT Desk — Futures Prop Tracker
-   Motor de métricas + UI. Persistencia en localStorage.
+   Motor de métricas + UI. Persistencia en la nube (Supabase, ver cloud.js) con copia local en IndexedDB.
    ============================================================ */
 
 const STORE_KEY = 'crtdesk_v1';
@@ -90,12 +90,13 @@ const NOTRADE_REASONS = {
   other:'Altres'
 };
 
-let DB = load();
+let DB = normalizeDB(null);   // se rellena al entrar (Cloud.start)
 
-function load(){
+// Completa y migra un journal (de la nube, de la copia local o de un JSON importado)
+function normalizeDB(raw){
   try{
-    const raw = localStorage.getItem(STORE_KEY);
-    const base = raw ? Object.assign(structuredClone(DEFAULTS), JSON.parse(raw)) : structuredClone(DEFAULTS);
+    if(typeof raw==='string') raw=JSON.parse(raw);
+    const base = raw ? Object.assign(structuredClone(DEFAULTS), raw) : structuredClone(DEFAULTS);
     // inicializar firmas desde presets si es la primera vez
     if(!base.firms){ base.firms = structuredClone(FIRM_PRESETS); }
     // añadir firmas de preset que aún no estén (sin pisar las editadas por el usuario)
@@ -135,7 +136,11 @@ function planSpec(firmName, planName, phase){
   const p = f.plans[planName];
   return { size:p.size, trailing:f.trailing||'eod', ...(p[phase==='Funded'?'funded':'eval']) };
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+// Guarda: copia local al instante + subida a la nube (ver cloud.js). Nunca falla por espacio.
+function save(){ if(typeof Cloud!=='undefined') Cloud.changed(); }
+// Captura: atributos <img> (las de la nube se cargan con enlace privado)
+function imgSrc(ref){ return typeof Cloud!=='undefined'?Cloud.imgSrc(ref):ref; }
+function imgAttrs(ref){ const r=typeof Cloud!=='undefined'&&Cloud.isRef(ref); return `${r?`data-ref="${ref}" `:''}src="${imgSrc(ref)}"`; }
 
 /* ---------- helpers ---------- */
 const $ = (s,el=document)=>el.querySelector(s);
@@ -1776,7 +1781,7 @@ function calDayDetail(dateStr){
         </div>
         ${errs.length?`<div style="margin-top:6px">${errs.map(f=>`<span class="tag bad" style="margin:1px">${FLAG_LABELS[f]||f}</span>`).join('')}</div>`:''}
         ${t.note?`<div class="hint" style="margin-top:6px">${t.note}</div>`:''}
-        ${showImg&&tradeImgs(t).length?`<div class="thumb-row">${tradeImgs(t).map(img=>`<img class="thumb" src="${img}" onclick="lightbox('${img}')">`).join('')}</div>`:''}
+        ${showImg&&tradeImgs(t).length?`<div class="thumb-row">${tradeImgs(t).map(img=>`<img class="thumb" ${imgAttrs(img)} onclick="lightbox(this.dataset.ref||this.src)">`).join('')}</div>`:''}
       </div>`;
     }).join(''); })()||'<p class="hint">Sin trades este día.</p>'}
     <div class="modal-actions"><button class="btn ghost" onclick="closeModal()">Cerrar</button></div>
@@ -1787,7 +1792,7 @@ function calDayDetail(dateStr){
 function lightbox(src){
   let lb=$('#lightbox');
   if(!lb){ lb=document.createElement('div'); lb.id='lightbox'; lb.className='lightbox'; lb.onclick=()=>lb.classList.remove('show'); document.body.appendChild(lb); }
-  lb.innerHTML=`<img src="${src}">`;
+  lb.innerHTML=`<img ${imgAttrs(src)}>`;
   lb.classList.add('show');
 }
 
@@ -2194,7 +2199,7 @@ function renderNoTradeThumbs(){
   const c=$('#nt_thumbs');
   if(!c) return;
   c.innerHTML=imgs.map((src,i)=>`<div style="position:relative">
-    <img class="thumb" src="${src}">
+    <img class="thumb" ${imgAttrs(src)}>
     <button onclick="removeNoTradeImage(${i})" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;cursor:pointer;line-height:1">×</button>
   </div>`).join('');
   $$('#nt_thumbs .thumb').forEach((el,i)=>{ el.onclick=()=>lightbox(imgs[i]); });
@@ -2537,7 +2542,7 @@ function compressImage(file){
     reader.onload=e=>{
       const img=new Image();
       img.onload=()=>{
-        const max=1000;
+        const max=1600;   // en la nube hay espacio: capturas más nítidas
         let {width,height}=img;
         if(width>max||height>max){
           if(width>height){ height=height*max/width; width=max; }
@@ -2546,7 +2551,7 @@ function compressImage(file){
         const canvas=document.createElement('canvas');
         canvas.width=width; canvas.height=height;
         canvas.getContext('2d').drawImage(img,0,0,width,height);
-        resolve(canvas.toDataURL('image/jpeg',0.7));
+        resolve(canvas.toDataURL('image/jpeg',0.82));
       };
       img.src=e.target.result;
     };
@@ -2568,7 +2573,7 @@ function renderTradeThumbs(){
   const c=$('#f_thumbs');
   if(!c) return;
   c.innerHTML=imgs.map((src,i)=>`<div style="position:relative">
-    <img class="thumb" src="${src}" onclick="lightbox('${'IMG'+i}')">
+    <img class="thumb" ${imgAttrs(src)}>
     <button onclick="removeTradeImage(${i})" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;cursor:pointer;line-height:1">×</button>
   </div>`).join('');
   // lightbox por índice (evita meter base64 gigante en onclick)
@@ -3010,19 +3015,27 @@ function feSavePlan(){
 /* ============================================================
    IMPORT / EXPORT
    ============================================================ */
-function exportData(){
-  const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
+// Copia de seguridad COMPLETA: incluye las capturas dentro del JSON (se descargan de la nube)
+async function exportData(){
+  toast('Preparando copia de seguridad (con capturas)…');
+  const copy=JSON.parse(JSON.stringify(DB));
+  let fail=0;
+  try{ if(typeof Cloud!=='undefined') fail=await Cloud.inlineImages(copy); }catch(e){ fail=-1; }
+  const blob=new Blob([JSON.stringify(copy,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url; a.download=`crtdesk-${todayISO()}.json`; a.click();
-  URL.revokeObjectURL(url); toast('Datos exportados');
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+  toast(fail?'⚠ Exportado, pero sin algunas capturas (¿sin conexión?)':'Copia exportada (con capturas)');
 }
 function importData(file){
   const r=new FileReader();
   r.onload=()=>{
     try{ const d=JSON.parse(r.result);
-      if(d.trades) DB=Object.assign(structuredClone(DEFAULTS),d);
-      save(); render(); toast('Datos importados');
+      if(!d.trades){ toast('Archivo inválido'); return; }
+      if(!confirm(`Importar este archivo SUSTITUYE tu journal actual (en la nube y en todos tus dispositivos) por el del archivo (${d.trades.length} trades).\n\n¿Continuar?`)) return;
+      DB=normalizeDB(d);
+      save(); render(); toast('Datos importados · subiendo a la nube');
     }catch(e){ toast('Archivo inválido'); }
   };
   r.readAsText(file);
@@ -3324,13 +3337,23 @@ function init(){
   $('#exportBtn').onclick=exportData;
   $('#aiReportBtn').onclick=exportAIReport;
   $('#importBtn').onclick=()=>$('#fileInput').click();
-  $('#fileInput').onchange=e=>{ if(e.target.files[0]) importData(e.target.files[0]); };
+  $('#fileInput').onchange=e=>{ if(e.target.files[0]) importData(e.target.files[0]); e.target.value=''; };
+  if($('#logoutBtn')) $('#logoutBtn').onclick=()=>Cloud.logout();
+  if($('#syncStatus')) $('#syncStatus').onclick=()=>{ toast(Cloud.status.text||'—'); if(Cloud.dirty) Cloud.flush(); };
   // Cerrar solo si el clic empieza Y termina en el fondo (no al arrastrar desde un input)
   let _downOnBg=false;
   $('#modalBg').addEventListener('mousedown',e=>{ _downOnBg = (e.target.id==='modalBg'); });
   $('#modalBg').addEventListener('mouseup',e=>{ if(_downOnBg && e.target.id==='modalBg') closeModal(); _downOnBg=false; });
   render();
-  // consolidar migraciones (sesiones, cuentas) guardando una vez al arrancar
-  try{ save(); }catch(e){}
 }
-init();
+Cloud.start({
+  app:'crtdesk',                 // fila del journal de futuros en la nube
+  legacyKey:STORE_KEY,           // journal antiguo del navegador → se migra solo la primera vez
+  normalize:normalizeDB,
+  getDB:()=>DB,
+  setDB:d=>{ DB=d; },
+  onReady:init,
+  onRemoteChange:()=>render(),
+  isBusy:()=>$('#modalBg').classList.contains('show'),
+  toast:m=>toast(m)
+});
