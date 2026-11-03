@@ -521,6 +521,9 @@ function render(){
   // filtro por mes (solo Disciplina y Rendimiento)
   const showMonth = MONTH_TABS.includes(CURRENT_TAB);
   if(showMonth && MONTH_FILTER.length) T = T.filter(t=>MONTH_FILTER.includes((t.date||'').slice(0,7)));
+  // Los días mínimos no son trading normal: fuera de las pestañas de métricas (sí en calendario, journal y ROI)
+  const MD = T.filter(isMinDay);
+  if(showFilter) T = T.filter(t=>!isMinDay(t));
   const filterBars = () => showFilter
     ? `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start">${phaseFilterBar()}${showMonth?monthFilterBar():''}</div>`
     : '';
@@ -541,6 +544,7 @@ function render(){
     journal:renderJournal,
     sim:renderSim
   })[CURRENT_TAB](v, T);
+  if(CURRENT_TAB==='performance' && MD.length) v.insertAdjacentHTML('beforeend', minDayCard(MD));
   // prepend filter bar en pestañas de métricas
   if(showFilter){
     v.insertAdjacentHTML('afterbegin', filterBars());
@@ -550,8 +554,9 @@ function render(){
 function phaseFilterBar(){
   const opts=[['all','Todo'],['eval','Eval'],['funded','Funded']];
   // contar trades por fase para mostrar
-  const counts={all:DB.trades.length, eval:0, funded:0};
-  DB.trades.forEach(t=>{ const p=tradePhase(t); if(p)counts[p]++; });
+  const NT_=DB.trades.filter(t=>!isMinDay(t));   // los días mínimos van aparte
+  const counts={all:NT_.length, eval:0, funded:0};
+  NT_.forEach(t=>{ const p=tradePhase(t); if(p)counts[p]++; });
   return `<div class="phase-filter">
     ${opts.map(([k,label])=>`<button class="phase-btn ${PHASE_FILTER===k?'active':''}" onclick="setPhaseFilter('${k}')">${label} <span class="pf-count">${counts[k]}</span></button>`).join('')}
   </div>`;
@@ -822,13 +827,77 @@ function tradeDrillList(items, opts={}){
 }
 
 /* ============================================================
+   DÍAS MÍNIMOS (fondeadas) — aparte del trading normal
+   ============================================================ */
+function minDayStats(arr){
+  const W=arr.filter(t=>(t.pnl||0)>0), Lo=arr.filter(t=>(t.pnl||0)<0);
+  const avgW=W.length?W.reduce((s,t)=>s+t.pnl,0)/W.length:null;
+  const avgL=Lo.length?Lo.reduce((s,t)=>s+Math.abs(t.pnl),0)/Lo.length:null;
+  const risks=arr.map(t=>t.riskUSD).filter(x=>x>0);
+  const avgRisk=risks.length?risks.reduce((a,b)=>a+b,0)/risks.length:null;
+  // % de acierto necesario para no perder dinero: pérdida media / (pérdida media + ganancia media).
+  // Sin pérdidas todavía, se estima con el riesgo medio (lo que perderías si salta el stop).
+  const lossRef=avgL!=null?avgL:avgRisk;
+  const beWR=(lossRef&&avgW)?lossRef/(lossRef+avgW)*100:null;
+  const wr=(W.length+Lo.length)?W.length/(W.length+Lo.length)*100:null;
+  const withPlan=arr.filter(t=>t.planChecked!=null);
+  return { n:arr.length, w:W.length, l:Lo.length, be:arr.length-W.length-Lo.length, wr, beWR, avgW, avgL, avgRisk,
+    net:arr.reduce((s,t)=>s+(t.pnl||0),0), worst:Lo.length?Math.min(...Lo.map(t=>t.pnl)):null,
+    daysPerStop:(lossRef&&avgW)?lossRef/avgW:null, full:withPlan.filter(planComplete).length, withPlan:withPlan.length };
+}
+// Días mínimos por sesión: dónde salen mejor
+function minDayBySession(arr){
+  const g={}; arr.forEach(t=>{ const k=t.session||'Sin sesión'; (g[k]=g[k]||[]).push(t); });
+  return Object.entries(g).map(([k,a])=>[k,minDayStats(a)]).sort((x,y)=>y[1].n-x[1].n);
+}
+function minDaySessionTable(arr){
+  const rows=minDayBySession(arr);
+  if(!rows.length) return '';
+  const best=rows.filter(([,s])=>s.n>=3).sort((x,y)=>y[1].net-x[1].net)[0];
+  return `<div class="table-wrap" style="border:none;margin-top:12px"><table style="min-width:auto">
+      <thead><tr><th>Sesión</th><th>N</th><th>Ganados / perdidos</th><th>Acierto</th><th>Necesario</th><th>Neto</th><th>Peor día</th></tr></thead>
+      <tbody>${rows.map(([k,s])=>`<tr>
+        <td style="font-family:var(--sans);font-weight:600">${k}</td>
+        <td>${s.n}</td>
+        <td>${s.w} / ${s.l}</td>
+        <td class="${s.wr==null||s.beWR==null?'':s.wr>=s.beWR?'pos':'neg'}">${s.wr==null?'—':fmt(s.wr,0)+'%'}</td>
+        <td>${s.beWR==null?'—':fmt(s.beWR,0)+'%'}</td>
+        <td class="${cls(s.net)}">${fmt$(s.net)}</td>
+        <td>${s.worst==null?'—':fmt$(s.worst)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="hint" style="margin-top:6px">${best?`Mejor sesión de momento: <b>${best[0]}</b> (${fmt$(best[1].net)} en ${best[1].n} días).`:'Con menos de 3 días por sesión aún no se puede comparar.'} Con pocos días, un solo stop cambia la tabla.</div>`;
+}
+function minDayCard(arr){
+  const s=minDayStats(arr);
+  const wrCls=s.wr==null||s.beWR==null?'':s.wr>=s.beWR?'pos':'neg';
+  const verdict=s.beWR==null?'':
+    s.wr==null?'':
+    s.wr>=s.beWR?`Ahora mismo te salen a cuenta: aciertas el <b>${fmt(s.wr,0)}%</b> y necesitas el <b>${fmt(s.beWR,0)}%</b>. Ojo: con pocos datos, un solo stop cambia el resultado.`
+    :`<b>Te están costando dinero</b>: aciertas el ${fmt(s.wr,0)}% y necesitas el ${fmt(s.beWR,0)}% para no perder. Plantéate otra forma de cumplir los días (menos riesgo o un trade normal pequeño).`;
+  return `<div class="card" style="margin-top:14px">
+    <h3>Días mínimos (fondeadas) 📅 <span class="hint" style="text-transform:none;letter-spacing:0">no cuentan en las estadísticas de arriba</span></h3>
+    <div class="grid g-4" style="margin-bottom:12px">
+      ${statCard('Días mínimos', s.n, `${s.w} ganados · ${s.l} perdidos${s.be?' · '+s.be+' BE':''}`)}
+      ${statCard('Acierto', s.wr==null?'—':fmt(s.wr,0)+'%', s.beWR==null?'necesitas datos de ganancia y riesgo':`necesitas ${fmt(s.beWR,0)}% para no perder`, wrCls)}
+      ${statCard('Neto', fmt$(s.net), s.worst!=null?'peor día '+fmt$(s.worst):'sin pérdidas aún', cls(s.net))}
+      ${statCard('1 stop =', s.daysPerStop==null?'—':fmt(s.daysPerStop,1)+' días', s.avgW!=null?`ganas ${fmt$(s.avgW)} · ${s.avgL!=null?'pierdes '+fmt$(-s.avgL):'riesgo '+fmt$(-(s.avgRisk||0))}`:'')}
+    </div>
+    ${verdict?`<div class="insight ${wrCls==='neg'?'warn':''}">${verdict}</div>`:''}
+    ${minDaySessionTable(arr)}
+    <div class="hint" style="margin-top:10px">Reglas cumplidas (${PLAN_DIA_MINIMO.join(' · ')}): <b>${s.full}</b> de ${s.withPlan}. Las pérdidas salen del drawdown de la cuenta fondeada.</div>
+    ${tradeDrillList([...arr].sort((a,b)=>a.date<b.date?1:-1).map(t=>({t,tag:(t.pnl||0)>0?fmt$(t.pnl):(t.pnl||0)<0?fmt$(t.pnl):'BE',tone:(t.pnl||0)>0?'ok':(t.pnl||0)<0?'bad':'neutral'})),{label:'Ver días mínimos'})}
+  </div>`;
+}
+
+/* ============================================================
    SIMULADOS — trades que tomarías pero no operas (p. ej. NY)
    Se guardan en DB.paperTrades y NUNCA cuentan en las estadísticas reales.
    ============================================================ */
 const NY_SESSION='NY (15:30+)';
 function renderSim(v){
   const S=[...(DB.paperTrades||[])].sort((a,b)=> a.date<b.date?1:-1);
-  const R=DB.trades||[];
+  const R=(DB.trades||[]).filter(t=>!isMinDay(t));
   const wrT=arr=>arr.some(t=>t.result==='win'||t.result==='loss')?fmt(winrate(arr),0)+'%':'—';
   const expT=arr=>arr.length?fmtR(expectancy(arr)):'—';
   const pfT=arr=>{ if(!arr.length) return '—'; const p=profitFactor(arr); return p===Infinity?'∞':fmt(p,2); };
@@ -1776,7 +1845,7 @@ function calDayDetail(dateStr){
       const showImg=!t.copyGroup||!shownG.has(t.copyGroup); if(t.copyGroup) shownG.add(t.copyGroup);
       return `<div class="card" style="padding:12px;margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <div><b>${t.symbol}</b> <span class="hint">${t.setup} · ${t.session}${t.account?' · '+t.account:''}${nCp?` · ⧉ copia (${nCp+1} cuentas)`:''}</span></div>
+          <div><b>${t.symbol}</b> <span class="hint">${isMinDay(t)?'📅 Día mínimo · ':''}${t.setup} · ${t.session}${t.account?' · '+t.account:''}${nCp?` · ⧉ copia (${nCp+1} cuentas)`:''}</span></div>
           <div style="font-family:var(--mono);font-weight:700" class="${cls(t.realizedR)}">${fmtR(t.realizedR)} · ${fmt$(t.pnl)}</div>
         </div>
         ${errs.length?`<div style="margin-top:6px">${errs.map(f=>`<span class="tag bad" style="margin:1px">${FLAG_LABELS[f]||f}</span>`).join('')}</div>`:''}
@@ -1817,7 +1886,7 @@ function renderJournal(v, T){
         return `<tr>
           <td>${t.date}</td>
           <td>${t.symbol||'—'}${tradeImgs(t).length?` <span title="${tradeImgs(t).length} imagen(es)" style="opacity:.6">📎</span>`:''}${copySiblings(t).length?` <span class="hint" title="Mismo trade copiado en: ${copySiblings(t).map(x=>(x.account||'sin cuenta').replace(/"/g,'&quot;')).join(', ')}">⧉${copySiblings(t).length+1}</span>`:''}</td>
-          <td style="font-family:var(--sans)">${t.setup||'—'}</td>
+          <td style="font-family:var(--sans)">${t.setup||'—'}${isMinDay(t)?' <span class="tag neutral" title="Día mínimo: va aparte de las estadísticas">📅 día mín.</span>':''}</td>
           <td>${t.session||'—'}</td>
           <td>${fmt(t.plannedR,1)}</td>
           <td class="${cls(t.realizedR)}">${fmtR(t.realizedR)}</td>
@@ -2017,7 +2086,16 @@ const PLAN_MANIPULACION_LTF=[
   'A un trade de fondear: solo setup A+',
   'Solo se opera desde el ordenador, con el gráfico completo delante y el checklist leído. Desde el móvil no se abre nunca una posición'
 ];
-const ENTRY_TYPE_LABELS={manipulacion:'Manipulación',manipulacion_ltf:'Manipulación LTF',continuacion:'Continuación'};
+// Día mínimo (fondeadas): trade para cumplir los días mínimos de la prop (riesgo alto, objetivo pequeño).
+// NO es trading normal: va APARTE de las estadísticas de rendimiento y disciplina, pero el dinero sí cuenta
+// (balance de la cuenta, ROI y P&L del calendario).
+const PLAN_DIA_MINIMO=[
+  'Rango mínimo de M15',
+  'Tendencia a favor',
+  'Rangos a favor'
+];
+const ENTRY_TYPE_LABELS={manipulacion:'Manipulación',manipulacion_ltf:'Manipulación LTF',continuacion:'Continuación',dia_minimo:'Día mínimo (fondeada)'};
+const isMinDay=t=>!!t&&t.entryType==='dia_minimo';
 // Reglas que se añaden SOLO en trades de cuentas fondeadas (al final, para no mover las demás)
 const PLAN_FUNDED_EXTRA=['Cuenta fondeada: solo opero de 9h a 15h'];
 // Solo en fondeadas y solo en manipulaciones (manipulación y manipulación LTF). Van detrás de la de 9h-15h.
@@ -2030,6 +2108,7 @@ const LONDON_SESSION='Londres (9-12)';
 // session: sesión del trade. Si no se pasa (p. ej. para leer textos), se incluyen todas las reglas.
 function planChecklist(entryType, phase, session){
   let base=PLAN_MANIPULACION;
+  if(entryType==='dia_minimo') return PLAN_DIA_MINIMO;   // tiene sus propias reglas, sin las de fondeadas
   if(entryType==='continuacion') base=PLAN_CONTINUACION;
   else if(entryType==='manipulacion_ltf') base=PLAN_MANIPULACION_LTF;
   if(phase!=='funded') return base;
@@ -2288,7 +2367,9 @@ function tradeModal(t){
         <option value="manipulacion" ${(e.entryType||'manipulacion')==='manipulacion'?'selected':''}>Manipulación</option>
         <option value="manipulacion_ltf" ${e.entryType==='manipulacion_ltf'?'selected':''}>Manipulación LTF</option>
         <option value="continuacion" ${e.entryType==='continuacion'?'selected':''}>Continuación</option>
+        ${SIM?'':`<option value="dia_minimo" ${e.entryType==='dia_minimo'?'selected':''}>Día mínimo (fondeada)</option>`}
       </select>
+      <div class="hint" id="f_entryHint" style="margin-top:6px;display:none"></div>
     </div>
     <div class="plan-box">
       <div class="plan-title">📋 Plan de trading — checklist antes de entrar</div>
@@ -2415,6 +2496,12 @@ function rebuildChecklist(initial){
   const type=$('#f_entryType')?.value||'manipulacion';
   const cPhase=checklistPhase();
   const sess=$('#f_session')?.value||'';
+  const hintEl=$('#f_entryHint');
+  if(hintEl){
+    const md=type==='dia_minimo';
+    hintEl.style.display=md?'':'none';
+    hintEl.innerHTML=md?`📅 <b>Día mínimo</b>: no cuenta en tus estadísticas de trading (expectancy, win rate, setups, disciplina…). Va aparte en <b>Rendimiento → Días mínimos</b>. El dinero sí cuenta en el balance de la cuenta, el ROI y el calendario.${modalPhase()!=='funded'?' <span style="color:var(--amber)">⚠ Este trade no está en una cuenta fondeada.</span>':''}`:'';
+  }
   const list=planChecklist(type, cPhase, sess);
   const ownLen=planChecklist(type, modalPhase(), sess).length;
   const saved=$('#modalBg')?._planChecked||[];
@@ -3058,7 +3145,9 @@ function importData(file){
 function buildAIReport(){
   // Informe completo en texto plano pensado para que otra IA lo lea y lo analice.
   // Usa EXACTAMENTE las mismas funciones de cálculo que el dashboard.
-  const T=[...DB.trades].sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0);
+  const ALL=[...DB.trades].sort((a,b)=> a.date<b.date?-1: a.date>b.date?1:0);
+  const T=ALL.filter(t=>!isMinDay(t));     // trading normal
+  const MD=ALL.filter(isMinDay);           // días mínimos de fondeadas: van aparte (sección 7)
   const NT=[...(DB.noTradeDays||[])].sort((a,b)=> a.date<b.date?-1:1);
   const L=[];
   const pct=v=>fmt(v,1)+'%';
@@ -3182,6 +3271,7 @@ function buildAIReport(){
   // =================== CABECERA E INSTRUCCIONES ===================
   L.push('=== INFORME COMPLETO DEL JOURNAL DE TRADING — CRT DESK (FUTUROS) ===');
   L.push(`Exportado: ${todayISO()} · Periodo: ${T.length?T[0].date+' → '+T[T.length-1].date:'sin trades'} · ${T.length} trades${uniqN(T)!==T.length?` (${uniqN(T)} decisiones únicas: hay trades copiados en varias cuentas)`:''} · ${NT.filter(n=>(n.type||'noday')==='noday').length} días sin operar · ${NT.filter(n=>n.type==='unfilled').length} entradas no ejecutadas`);
+  if(MD.length) L.push(`Además: ${MD.length} día(s) mínimo(s) en fondeadas, aparte (sección 7).`);
   L.push('Trader: opera futuros intradía (MNQ, MES, MYM...) con metodología CRT (Candle Range Theory) en prop firms (evaluaciones y cuentas fondeadas).');
   line();
   L.push('## 0. CÓMO LEER ESTE INFORME');
@@ -3201,6 +3291,7 @@ function buildAIReport(){
   L.push('- "—" significa sin datos (no cero).');
   L.push('- Trades simulados (sección 6, identificados como [S1], [S2]...): no operados, resultado hipotético. No mezclarlos con los reales ([T1], [T2]...).');
   L.push('- Copias (⧉): cuando el trader toma el MISMO trade en varias cuentas, se registra una vez por cuenta y en las estadísticas cuenta como un trade por cuenta (así lo ha decidido el trader). Cada copia indica con qué otros [T#] comparte decisión; las "decisiones únicas" del bloque de estadísticas son los trades sin duplicar. Para analizar el proceso de decisión (win rate real del setup, errores, disciplina) ten en cuenta que una misma decisión pesa tantas veces como cuentas.');
+  L.push('- Días mínimos (sección 7, [D1], [D2]...): en cuentas fondeadas, trades hechos solo para cumplir los días mínimos de la prop (mucho riesgo para un objetivo pequeño, p. ej. arriesgar 600$ para ganar 100$), con sus propias reglas. NO están en las estadísticas de las secciones 1, 2 y 4 (no son el sistema de trading); su dinero SÍ está en el balance de las cuentas (sección 3).');
   L.push('- Muestras pequeñas (sobre todo en meses sueltos) dan métricas poco fiables; tenlo en cuenta al sacar conclusiones.');
   line();
   L.push('Checklists vigentes:');
@@ -3256,7 +3347,7 @@ function buildAIReport(){
   L.push(`Cuentas: ${accts.length} · en curso ${accts.filter(a=>(a.status||'en_curso')==='en_curso').length} · pasadas ${nPassed} (${nDone?pct(nPassed/nDone*100):'—'} de ${nDone} terminadas) · llegaron a fondeada ${accts.filter(reachedFunded).length} · con payout ${accts.filter(a=>a.status==='payout').length} · perdidas ${accts.filter(a=>a.status==='perdida').length}`);
   accts.forEach(a=>{
     const spec=planSpec(a.firm,a.plan,a.phase)||{};
-    const all=T.filter(t=>t.account===a.name);
+    const all=ALL.filter(t=>t.account===a.name);   // el dinero de los días mínimos sí cuenta en la cuenta
     const aT=a.phase==='Funded'?all.filter(t=>tradePhase(t)==='funded'):all;
     const realized=totalPnl(aT), balance=(a.startBalance||0)+realized;
     let run=a.startBalance||0, peak=run;
@@ -3319,6 +3410,18 @@ function buildAIReport(){
     line();
     L.push('Detalle de cada trade simulado:');
     S.forEach((t,i)=>tradeDetail(t,i,'S'));
+    line();
+  }
+  if(MD.length){
+    L.push('## 7. DÍAS MÍNIMOS EN CUENTAS FONDEADAS (aparte del trading normal)');
+    const s=minDayStats(MD);
+    L.push(`Reglas de estos trades: ${PLAN_DIA_MINIMO.join(' · ')}`);
+    L.push(`Días mínimos: ${s.n} (${s.w} ganados, ${s.l} perdidos, ${s.be} BE) · acierto ${s.wr==null?'—':pct(s.wr)} · acierto necesario para no perder ${s.beWR==null?'—':pct(s.beWR)} · neto ${fmt$(s.net)} · ganancia media ${s.avgW==null?'—':fmt$(s.avgW)} · pérdida media ${s.avgL==null?'—':fmt$(-s.avgL)} · peor ${s.worst==null?'—':fmt$(s.worst)} · 1 stop equivale a ${s.daysPerStop==null?'—':num(s.daysPerStop,1)} días ganados · reglas completas ${s.full}/${s.withPlan}`);
+    line();
+    L.push('Por sesión:');
+    minDayBySession(MD).forEach(([k,x])=>L.push(`  - ${k}: ${x.n} días (${x.w} ganados / ${x.l} perdidos) · acierto ${x.wr==null?'—':pct(x.wr)} (necesario ${x.beWR==null?'—':pct(x.beWR)}) · neto ${fmt$(x.net)} · peor ${x.worst==null?'—':fmt$(x.worst)}`));
+    line();
+    MD.forEach((t,i)=>tradeDetail(t,i,'D'));
     line();
   }
   L.push('=== FIN DEL INFORME ===');
