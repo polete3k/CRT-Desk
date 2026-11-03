@@ -2020,13 +2020,25 @@ const PLAN_MANIPULACION_LTF=[
 const ENTRY_TYPE_LABELS={manipulacion:'Manipulación',manipulacion_ltf:'Manipulación LTF',continuacion:'Continuación'};
 // Reglas que se añaden SOLO en trades de cuentas fondeadas (al final, para no mover las demás)
 const PLAN_FUNDED_EXTRA=['Cuenta fondeada: solo opero de 9h a 15h'];
+// Solo en fondeadas y solo en manipulaciones (manipulación y manipulación LTF). Van detrás de la de 9h-15h.
+const PLAN_FUNDED_MANIP_EXTRA=['Cuenta fondeada: manipulación en 1h o más'];
+// Solo en fondeadas, manipulaciones y sesión de Londres (la última, para que quitarla no mueva ninguna otra)
+const PLAN_FUNDED_LONDON_EXTRA=['Cuenta fondeada en Londres: entrada en OB M15'];
+const LONDON_SESSION='Londres (9-12)';
 // Devuelve la checklist del tipo de entrada (por defecto manipulación, retrocompatible).
 // Si la fase es 'funded', añade las reglas propias de cuentas fondeadas.
-function planChecklist(entryType, phase){
+// session: sesión del trade. Si no se pasa (p. ej. para leer textos), se incluyen todas las reglas.
+function planChecklist(entryType, phase, session){
   let base=PLAN_MANIPULACION;
   if(entryType==='continuacion') base=PLAN_CONTINUACION;
   else if(entryType==='manipulacion_ltf') base=PLAN_MANIPULACION_LTF;
-  return phase==='funded' ? [...base, ...PLAN_FUNDED_EXTRA] : base;
+  if(phase!=='funded') return base;
+  const list=[...base, ...PLAN_FUNDED_EXTRA];
+  if(entryType!=='continuacion'){
+    list.push(...PLAN_FUNDED_MANIP_EXTRA);
+    if(session===undefined || session===LONDON_SESSION) list.push(...PLAN_FUNDED_LONDON_EXTRA);
+  }
+  return list;
 }
 // Fase del trade que se está editando en el formulario (manual o deducida de la cuenta)
 function modalPhase(){
@@ -2289,7 +2301,7 @@ function tradeModal(t){
     </div>
     <div class="field-row">
       <div class="field"><label>Setup <span class="hint" id="f_setupAuto"></span></label><select id="f_setup">${SETUPS.map(s=>`<option ${e.setup===s?'selected':''}>${s}</option>`).join('')}</select></div>
-      <div class="field"><label>Sesión</label><select id="f_session">${SESSIONS.map(s=>`<option ${defSession===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="field"><label>Sesión</label><select id="f_session" onchange="rebuildChecklist()">${SESSIONS.map(s=>`<option ${defSession===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>¿Dónde empezó el movimiento? <span class="hint">estructura CRT</span></label>
       <select id="f_moveType" onchange="toggleMoveOther()">
@@ -2402,8 +2414,9 @@ function rebuildChecklist(initial){
   const box=$('#f_plan'); if(!box) return;
   const type=$('#f_entryType')?.value||'manipulacion';
   const cPhase=checklistPhase();
-  const list=planChecklist(type, cPhase);
-  const ownLen=planChecklist(type, modalPhase()).length;
+  const sess=$('#f_session')?.value||'';
+  const list=planChecklist(type, cPhase, sess);
+  const ownLen=planChecklist(type, modalPhase(), sess).length;
   const saved=$('#modalBg')?._planChecked||[];
   box.innerHTML=list.map((rule,i)=>`<label class="plan-item">
     <input type="checkbox" data-plan="${i}" ${saved.includes(i)?'checked':''}>
@@ -2610,11 +2623,11 @@ function saveTrade(id){
   // Si editas un trade antiguo sin tocar su checklist, conserva su nº de reglas original.
   const newPhase=modalPhase();
   const origView=$('#modalBg')._planCheckedOrig||existing?.planChecked||[];
-  const checklistUntouched = existing && JSON.stringify([...origView].sort((a,b)=>a-b))===JSON.stringify([...newChecked].sort((a,b)=>a-b)) && (existing.entryType||'manipulacion')===newEntryType && (tradePhase(existing)||'')===(newPhase||'');
+  const checklistUntouched = existing && JSON.stringify([...origView].sort((a,b)=>a-b))===JSON.stringify([...newChecked].sort((a,b)=>a-b)) && (existing.entryType||'manipulacion')===newEntryType && (tradePhase(existing)||'')===(newPhase||'') && (newPhase!=='funded' || (existing.session||'')===($('#f_session').value||''));
   // Checklist / setup de cada cuenta según su fase (la regla de fondeadas solo cuenta en fondeadas)
   const setupSel=$('#f_setup').value;
   const setupAuto=!$('#modalBg')._setupManual;
-  const planFor=ph=>{ const tot=planChecklist(newEntryType,ph).length; const ch=newChecked.filter(i=>i<tot); return {planChecked:ch, planTotal:tot, setup: setupAuto?'Setup '+autoSetup(ch.length,tot):setupSel}; };
+  const planFor=ph=>{ const tot=planChecklist(newEntryType,ph,$('#f_session').value).length; const ch=newChecked.filter(i=>i<tot); return {planChecked:ch, planTotal:tot, setup: setupAuto?'Setup '+autoSetup(ch.length,tot):setupSel}; };
   const own=planFor(newPhase);
   const t={
     id:id||uid(),
@@ -3195,7 +3208,7 @@ function buildAIReport(){
     L.push(`  ${ENTRY_TYPE_LABELS[k]}:`);
     list.forEach((r,i)=>L.push(`    ${i+1}. ${r}`));
   });
-  L.push(`  Solo en trades de cuentas fondeadas se añade al final: ${PLAN_FUNDED_EXTRA.join(' · ')}`);
+  L.push(`  Solo en trades de cuentas fondeadas se añade al final: ${PLAN_FUNDED_EXTRA.join(' · ')}. Y si además es una manipulación (normal o LTF): ${PLAN_FUNDED_MANIP_EXTRA.join(' · ')}; y si es en sesión de Londres: ${PLAN_FUNDED_LONDON_EXTRA.join(' · ')}. (Reglas añadidas el 2026-11-03: los trades fondeados anteriores tienen menos reglas y conservan su setup.)`);
   L.push('Flags de error posibles: '+Object.entries(FLAG_LABELS).filter(([k])=>k!=='clean').map(([,l])=>l).join(', '));
   line();
 
@@ -3265,7 +3278,7 @@ function buildAIReport(){
     if(cs.length) L.push(`  ⧉ COPIA: es el mismo trade (misma entrada y misma decisión) que ${cs.map(x=>`[T${tIdx.get(x.id)+1}] (cuenta ${x.account||'sin cuenta'})`).join(', ')}. Solo cambian cuenta, riesgo y P&L.`);
     L.push(`  Tipo de entrada: ${ENTRY_TYPE_LABELS[t.entryType]||'no registrado (trade antiguo)'} · Setup: ${(t.setup||'—').replace('Setup ','')} · Sesión: ${t.session||'—'}${t.moveType?` · Origen del movimiento: ${MOVE_TYPES[t.moveType]||t.moveType}${t.moveOther?' ('+t.moveOther+')':''}`:''}`);
     if(t.planChecked!=null){
-      const list=planChecklist(t.entryType, tradePhase(t));
+      const list=planChecklist(t.entryType, tradePhase(t), t.session);
       const checked=t.planChecked||[];
       const txt=i=>list[i]!=null?list[i]:`regla ${i+1}`;
       if(t.planTotal){
