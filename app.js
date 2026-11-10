@@ -121,6 +121,12 @@ function normalizeDB(raw){
     (base.trades||[]).forEach(t=>{
       if(t.session && SESSION_MIGRATION[t.session]) t.session=SESSION_MIGRATION[t.session];
     });
+    // Desde nov-2026 la fase se elige en el trade (no se apuntan cuentas): fijar la de los trades antiguos
+    (base.trades||[]).forEach(t=>{
+      if(t.phase==='eval'||t.phase==='funded') return;
+      const acc=(base.accounts||[]).find(a=>a.name===t.account);
+      if(acc) t.phase=acc.phase==='Funded'?'funded':'eval';
+    });
     return base;
   }catch(e){
     const d = structuredClone(DEFAULTS);
@@ -1421,7 +1427,6 @@ function checkAccountAutoStatus(){
 }
 
 function renderROI(v, T){
-  checkAccountAutoStatus();
   const accts = DB.accounts;
   const costs = DB.propCosts||[];
   const payouts = DB.payouts||[];
@@ -1505,121 +1510,34 @@ function renderROI(v, T){
 
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;margin-top:20px">
       <span>Cuentas</span>
-      <div style="display:flex;gap:8px">
-        <button class="btn ghost sm" onclick="openFirmEditor()">⚙ Editar reglas</button>
-        <button class="btn primary sm" onclick="openAccountModal()">+ Cuenta</button>
-      </div>
+      <button class="btn primary sm" onclick="openAccountModal()">+ Cuenta</button>
     </div>
-    ${!accts.length?`<div class="empty"><div class="ico">▤</div><p class="hint">Sin cuentas. Añade una de tus firmas (LucidFlex, Topstep, MyFundedFutures, FundedNext...) y las reglas se cargan solas.</p><button class="btn primary" style="margin-top:14px" onclick="openAccountModal()">+ Añadir cuenta</button></div>`:
-    // Orden de las tarjetas: primero las cuentas activas, las quemadas al final (sin cambiar el orden dentro de cada grupo)
-    [...accts].sort((x,y)=>(x.status==='perdida'?1:0)-(y.status==='perdida'?1:0)).map(a=>{
-      const spec = planSpec(a.firm, a.plan, a.phase) || {};
-      // Trades de esta cuenta. Si la cuenta es funded, solo cuentan los trades
-      // hechos en fase funded (los de la eval no suman al balance real).
-      const allAcctTrades = T.filter(t=>t.account===a.name);
-      const aTrades = a.phase==='Funded'
-        ? allAcctTrades.filter(t=>tradePhase(t)==='funded')
-        : allAcctTrades;
-      const realized = totalPnl(aTrades);
-      const balance = (a.startBalance||0)+realized;
-      const dd = spec.drawdown||0;
-      const trailLock = spec.trailLock||0;
-      const lockedFloor = spec.lockedFloor||0;
-      // Suelo trailing EOD: sube con el PICO de balance alcanzado, nunca baja con las pérdidas.
-      // Reconstruimos el pico acumulando los trades en orden cronológico.
-      const startBal0 = a.startBalance||0;
-      let running0 = startBal0, peak0 = startBal0;
-      aTrades.slice().sort((x,y)=> x.date<y.date?-1:1).forEach(t=>{ running0+=(t.pnl||0); if(running0>peak0) peak0=running0; });
-      let floor;
-      if(trailLock && peak0>=trailLock) floor = lockedFloor;
-      else floor = peak0 - dd;
-      const locked = trailLock && peak0>=trailLock;
-      // margen real que te queda: desde el balance ACTUAL hasta el suelo
-      const ddRoom = balance - floor;
-      const ddPct = dd? Math.max(0,Math.min(100, ddRoom/dd*100)) : 0;
-
-      const target = spec.profitTarget||0;
-      const targetRoom = a.phase==='Evaluación'&&target? (a.startBalance+target) - balance : 0;
-      const targetPct = a.phase==='Evaluación'&&target? Math.max(0,Math.min(100, realized/target*100)) : 0;
-
-      // payout tracking (funded): días con profit >= minDailyProfit
-      const profitByDay={};
-      aTrades.forEach(t=>{ profitByDay[t.date]=(profitByDay[t.date]||0)+(t.pnl||0); });
-      const minDP=spec.minDailyProfit||0;
-      const qualDays = Object.values(profitByDay).filter(p=>minDP?p>=minDP:p>0).length;
-      const daysReq = spec.minDays||5;
-      const payoutReady = qualDays>=daysReq && realized>0;
-
-      // consistency (si aplica): mayor día / profit total
-      const dayProfits=Object.values(profitByDay).filter(p=>p>0);
-      const maxDay=dayProfits.length?Math.max(...dayProfits):0;
-      const consistency = realized>0? maxDay/realized*100 : 0;
-      const consLimit = spec.consistency||0;
-      const consistencyOK = !consLimit || consistency<=consLimit;
-
-      // daily loss limit: peor día
-      const worstDay = Math.min(0, ...Object.values(profitByDay));
-      const dll = spec.dailyLoss||0;
-
-      const firmObj=DB.firms[a.firm]||{};
-      const trailLabel = (firmObj.trailing||'eod')==='eod'?'EOD trailing':(firmObj.trailing==='intraday'?'trailing intradía':'estático');
-      const STATUS_LABELS={en_curso:'En curso',pasada:'Pasada',fondeada:'Fondeada',payout:'Con payout',perdida:'Perdida'};
-      const st=a.status||'en_curso';
-      const isEval = a.phase==='Evaluación';
-      const dead = st==='perdida';
-
-      // consejo según situación
-      let advice='';
-      if(dead){
-        advice='Cuenta quemada. Si quieres, elimínala o déjala como registro histórico.';
-      } else if(isEval && target){
-        if(targetPct>=100) advice='¡Objetivo alcanzado! Ya puedes pasarla a fondeada.';
-        else if(ddPct<25) advice='Cuidado: estás cerca del drawdown. Baja el riesgo hasta alejarte del suelo.';
-        else if(targetPct>=60) advice='Vas bien encaminado al target. No fuerces: mantén tu riesgo y deja que llegue.';
-        else advice='Aún lejos del target. Prioriza no quemarla: sobrevivir es más importante que correr.';
-      } else {
-        // funded
-        if(ddPct<25) advice='Estás cerca del suelo. Protege la cuenta: reduce tamaño hasta recuperar margen.';
-        else if(ddPct>60) advice='Buen colchón sobre el drawdown. Opera tranquilo y ve pensando en tu próximo payout.';
-        else advice='Margen razonable. Mantén disciplina y construye hacia el payout sin arriesgar el suelo.';
-      }
-
-      return `<div class="card" style="margin-bottom:12px;${dead?'opacity:.6':''}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
-          <div>
-            <div style="font-size:15px;font-weight:700">${a.name} <span class="phase-tag ${st==='fondeada'||st==='payout'?'funded':st==='perdida'?'mixed':'eval'}" style="position:static;margin-left:6px">${STATUS_LABELS[st]}</span></div>
-            <div class="acct-meta">${a.firm} ${a.plan} · ${trailLabel} · ${aTrades.length} trades${a.phase==='Funded'?' funded':''}</div>
-          </div>
-          <div style="display:flex;gap:6px">
-            ${(st==='fondeada'||st==='payout')?`<button class="btn ghost sm icon" onclick="adjustBalance('${a.id}')" title="Reajustar balance (tras payout)">💰</button>`:''}
-            <button class="btn ghost sm icon" onclick="editAccount('${a.id}')" title="Editar">✎</button>
-          </div>
-        </div>
-
-        <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:14px">
-          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">BALANCE</div><div style="font-family:var(--mono);font-size:22px;font-weight:700">${fmt$(balance)}</div></div>
-          <div><div class="label" style="font-size:10px;color:var(--ink-faint)">P&L ${a.phase==='Funded'?'funded':''}</div><div style="font-family:var(--mono);font-size:16px;font-weight:700" class="${cls(realized)}">${fmt$(realized)}</div></div>
-        </div>
-
-        ${isEval&&target?`
-        <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:3px"><span>📈 Progreso al objetivo</span><span style="font-family:var(--mono)">${fmt(targetPct,0)}% · faltan ${fmt$(Math.max(0,targetRoom))}</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${targetPct}%;background:var(--blue)"></div></div>
-        </div>`:''}
-
-        <div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);margin-bottom:3px"><span>🛡️ Margen hasta quemarla ${locked?'🔒':''}</span><span style="font-family:var(--mono)">${fmt$(ddRoom)} (suelo ${fmt$(floor)})</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:${ddPct}%;background:${ddPct>40?'var(--green)':ddPct>20?'var(--amber)':'var(--red)'}"></div></div>
-        </div>
-
-        ${consLimit&&realized>0&&!dead?`<div class="insight ${consistencyOK?'':'warn'}" style="margin:0 0 10px">Consistency: tu mayor día es <b>${fmt(consistency,0)}%</b> del profit (límite ${consLimit}%). ${consistencyOK?'Dentro ✓':'⚠ Reparte más el profit entre días.'}</div>`:''}
-        ${dll&&worstDay<=-dll?`<div class="insight bad" style="margin:0 0 10px">⚠ Tu peor día (${fmt$(worstDay)}) ${worstDay<-dll?'superó':'alcanzó'} el daily loss limit de ${fmt$(dll)}.</div>`:''}
-
-        <div class="insight ${dead?'bad':ddPct<25?'warn':''}" style="margin-top:4px">💡 ${advice}</div>
-      </div>`;
-    }).join('')}
-    ${accts.length?`<div class="insight" style="margin-top:6px">Todas tus firmas usan <b>trailing EOD</b>: el suelo sube con tu balance de cierre y, si el plan tiene trail lock, se bloquea al superarlo (🔒). Revisa las reglas exactas de cada firma con ⚙ Editar reglas.</div>`:''}
+    ${!accts.length?`<div class="empty"><div class="ico">▤</div><p class="hint">Sin cuentas. Añade cada cuenta que compres y ve marcando si la pasas, la fondeas, cobras o la pierdes: con eso salen tu % de aprobación y de payout.</p></div>`:`
+    <div class="card">
+      <div class="table-wrap" style="border:none"><table style="min-width:auto">
+        <thead><tr><th>Cuenta</th><th>Firma</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${[...accts].sort((x,y)=>(ACCT_ORDER[x.status||'en_curso']??9)-(ACCT_ORDER[y.status||'en_curso']??9)).map(a=>`<tr style="${a.status==='perdida'?'opacity:.55':''}">
+          <td style="font-family:var(--sans);font-weight:600">${esc(a.name)}</td>
+          <td class="hint" style="font-family:var(--sans)">${esc([a.firm,a.plan].filter(Boolean).join(' '))}</td>
+          <td><select onchange="setAccountStatus('${a.id}',this.value)" style="min-width:130px">
+            ${ACCT_STATUSES.map(([k,l])=>`<option value="${k}" ${(a.status||'en_curso')===k?'selected':''}>${l}</option>`).join('')}
+          </select></td>
+          <td style="text-align:right"><button class="btn ghost sm icon" onclick="editAccount('${a.id}')" title="Editar">✎</button></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div class="hint" style="margin-top:10px">Cambia el estado cuando pases, fondees, cobres o pierdas una cuenta. Las de arriba (estadística) se calculan con estos estados.</div>
+    </div>`}
   `;
+}
+const ACCT_STATUSES=[['en_curso','En curso'],['pasada','Pasada'],['fondeada','Fondeada'],['payout','Con payout'],['perdida','Perdida']];
+const ACCT_ORDER={en_curso:0,pasada:1,fondeada:2,payout:3,perdida:4};
+function esc(x){ return String(x==null?'':x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function setAccountStatus(id,st){
+  const a=DB.accounts.find(x=>x.id===id); if(!a) return;
+  a.status=st;
+  // fondeada / con payout implican que llegó a fondeada
+  if(st==='fondeada'||st==='payout') a.phase='Funded';
+  save(); render(); toast('Estado actualizado');
 }
 
 /* ============================================================
@@ -2120,6 +2038,11 @@ function planChecklist(entryType, phase, session){
   return list;
 }
 // Fase del trade que se está editando en el formulario (manual o deducida de la cuenta)
+// Fase del último trade guardado (para proponerla por defecto en uno nuevo)
+function lastTradePhase(){
+  const t=[...(DB.trades||[])].sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0)[0];
+  return t?(tradePhase(t)||'eval'):'eval';
+}
 function modalPhase(){
   const v=$('#f_phase')?.value;
   if(v) return v;
@@ -2349,7 +2272,7 @@ function tradeModal(t){
   const sibNames=sibs.map(x=>x.account);
   const copyAccts=SIM?[]:DB.accounts.filter(a=>a.status!=='perdida' && !sibNames.includes(a.name));
   const defRisk=e.riskUSD??200;
-  const copyHTML=SIM?'':`<div class="field" id="f_copyWrap"><label>${sibs.length?'Copias de este trade':'¿Lo tomaste también en otras cuentas?'} <span class="hint">cada cuenta cuenta como un trade</span></label>
+  const copyHTML=true?'':`<div class="field" id="f_copyWrap"><label>${sibs.length?'Copias de este trade':'¿Lo tomaste también en otras cuentas?'} <span class="hint">cada cuenta cuenta como un trade</span></label>
       ${sibs.length?`<div class="hint" style="margin-bottom:8px">⧉ Este trade también está en: ${sibs.map(x=>`<a href="#" onclick="event.preventDefault();editTrade('${x.id}')"><b>${x.account||'sin cuenta'}</b></a> (riesgo ${fmt$(x.riskUSD||0)}, P&L ${fmt$(x.pnl||0)})`).join(' · ')}.<br>Al guardar, los cambios se copian a todas (menos cuenta, fase, riesgo y P&L, que son de cada una). Para cambiar el riesgo o P&L de otra cuenta, ábrela desde el enlace.</div>`:''}
       ${copyAccts.length?`<div id="f_copies" style="display:flex;flex-direction:column;gap:6px">${copyAccts.map(a=>`<div class="copy-row" data-accid="${a.id}" style="${a.name===e.account?'display:none':''}">
         <label style="display:flex;align-items:center;gap:8px;font-weight:500;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" class="copy-chk" onchange="onCopyToggle()" style="width:auto"> ${sibs.length?'Añadir a ':''}${a.name} <span class="hint">${a.phase==='Funded'?'(fondeada)':'(eval)'}</span></label>
@@ -2392,16 +2315,12 @@ function tradeModal(t){
       <input type="text" id="f_moveOther" placeholder="Especifica qué momento..." value="${e.moveOther||''}" style="margin-top:8px;display:none">
     </div>
     <div class="field-row">
-      <div class="field"><label>Cuenta</label><select id="f_account" onchange="onAccountChange()"><option value="">— sin asignar —</option>${DB.accounts.filter(a=>a.status!=='perdida' || e.account===a.name).map(a=>{
-        const tag = a.phase==='Funded'?' (fondeada)':' (eval)';
-        const dead = a.status==='perdida'?' (quemada)':'';
-        return `<option value="${a.name.replace(/"/g,'&quot;')}" ${e.account===a.name?'selected':''}>${a.name}${tag}${dead}</option>`;
-      }).join('')}</select></div>
-      <div class="field"><label>Fase del trade <span class="hint">en qué fase se hizo</span></label>
+      <div class="field"><label>Fase <span class="hint">¿evaluación o fondeada?</span></label>
+        <input type="hidden" id="f_account" value="${(e.account||'').replace(/"/g,'&quot;')}">
         <select id="f_phase" onchange="rebuildChecklist()">
-          <option value="" ${!e.phase?'selected':''}>— auto (según cuenta) —</option>
-          <option value="eval" ${e.phase==='eval'?'selected':''}>Evaluación</option>
-          <option value="funded" ${e.phase==='funded'?'selected':''}>Funded</option>
+          ${(()=>{ const ph=e.id?tradePhase(e):(e.phase||lastTradePhase()); return `
+          <option value="eval" ${ph!=='funded'?'selected':''}>Evaluación</option>
+          <option value="funded" ${ph==='funded'?'selected':''}>Fondeada</option>`; })()}
         </select>
       </div>
     </div>
@@ -2409,7 +2328,7 @@ function tradeModal(t){
     <div class="field-row-3">
       <div class="field"><label>R planificado <span class="hint">tu objetivo</span></label><input type="number" id="f_plannedR" step="0.1" value="${e.plannedR??1.5}"></div>
       <div class="field"><label>R realizado <span class="hint">lo que sacaste</span></label><input type="number" id="f_realizedR" step="0.1" value="${e.realizedR??''}" oninput="onRealizedRChange()" placeholder="-1 / 0 / 1.5"></div>
-      <div class="field"><label>Riesgo ($)</label><input type="number" id="f_riskUSD" value="${e.riskUSD??200}" oninput="onRealizedRChange()"></div>
+      <div class="field"><label>Riesgo ($) <span class="hint">si es en varias cuentas, la suma</span></label><input type="number" id="f_riskUSD" value="${e.riskUSD??200}" oninput="onRealizedRChange()"></div>
     </div>
     <div class="calc-out" id="f_resultPreview" style="margin-bottom:14px;padding:12px 14px"></div>
     <div class="hint" style="margin:-8px 0 14px">El <b>R planificado</b> es tu objetivo al entrar. Sirve para medir cuánto dejas sobre la mesa cuando cierras antes o te saltas el plan — es la base del "coste de la indisciplina".</div>
@@ -2857,8 +2776,7 @@ function accountModal(a){
         ${[['en_curso','En curso'],['pasada','Pasada'],['fondeada','Fondeada'],['payout','Con payout'],['perdida','Perdida']].map(([v,l])=>`<option value="${v}" ${(e.status||'en_curso')===v?'selected':''}>${l}</option>`).join('')}
       </select>
     </div>
-    <div class="calc-out" id="a_preview" style="margin-bottom:14px"></div>
-    <div class="hint">¿Falta tu firma o un plan? Ve a <b>Cuentas → Editar reglas</b> para añadirlo. El balance se calcula con tus trades asignados.</div>
+    <div id="a_preview" style="display:none"></div>
     <div class="modal-actions">
       ${a?`<button class="btn danger" onclick="deleteAccount('${a.id}')">Eliminar</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
@@ -2890,15 +2808,15 @@ function acctPreview(){
 }
 function saveAccount(id){
   const firm=$('#a_firm').value, plan=$('#a_plan').value, phase=$('#a_phase').value;
-  const s=planSpec(firm,plan,phase);
-  if(!s){ toast('Ese plan no tiene reglas definidas'); return; }
+  const s=planSpec(firm,plan,phase)||{};
+  const prev=id?DB.accounts.find(x=>x.id===id):null;
   const a={
     id:id||uid(),
     name:$('#a_name').value.trim()||`${firm} ${plan}`,
     firm, plan, phase,
     status:$('#a_status').value,
-    size:s.size,
-    startBalance:s.size
+    size:s.size||prev?.size||0,
+    startBalance:s.size||prev?.startBalance||0
   };
   if(id){const i=DB.accounts.findIndex(x=>x.id===id);DB.accounts[i]=a;}
   else DB.accounts.push(a);
@@ -3345,17 +3263,8 @@ function buildAIReport(){
   const nPassed=accts.filter(a=>a.status==='pasada'||reachedFunded(a)).length;
   const nDone=accts.filter(a=>(a.status||'en_curso')!=='en_curso'||reachedFunded(a)).length;
   L.push(`Cuentas: ${accts.length} · en curso ${accts.filter(a=>(a.status||'en_curso')==='en_curso').length} · pasadas ${nPassed} (${nDone?pct(nPassed/nDone*100):'—'} de ${nDone} terminadas) · llegaron a fondeada ${accts.filter(reachedFunded).length} · con payout ${accts.filter(a=>a.status==='payout').length} · perdidas ${accts.filter(a=>a.status==='perdida').length}`);
-  accts.forEach(a=>{
-    const spec=planSpec(a.firm,a.plan,a.phase)||{};
-    const all=ALL.filter(t=>t.account===a.name);   // el dinero de los días mínimos sí cuenta en la cuenta
-    const aT=a.phase==='Funded'?all.filter(t=>tradePhase(t)==='funded'):all;
-    const realized=totalPnl(aT), balance=(a.startBalance||0)+realized;
-    let run=a.startBalance||0, peak=run;
-    aT.forEach(t=>{ run+=(t.pnl||0); if(run>peak) peak=run; });
-    const floor=(spec.trailLock&&peak>=spec.trailLock)?spec.lockedFloor:peak-(spec.drawdown||0);
-    const tgt=spec.profitTarget||0;
-    L.push(`  - ${a.name} · ${a.firm} ${a.plan} · fase ${a.phase} · estado ${STATUS_LABELS[a.status||'en_curso']||a.status} · ${all.length} trades (${aT.length} cuentan en el balance) · exp ${expT(aT)} · P&L ${fmt$(realized)} · balance ${fmt$(balance)} · suelo DD ${fmt$(floor)} · margen ${fmt$(balance-floor)}${a.phase==='Evaluación'&&tgt?` · objetivo ${fmt$(tgt)} (${pct(Math.max(0,realized/tgt*100))})`:''}`);
-  });
+  accts.forEach(a=>L.push(`  - ${a.name} · ${[a.firm,a.plan].filter(Boolean).join(' ')} · estado ${STATUS_LABELS[a.status||'en_curso']||a.status}`));
+  L.push('(Desde nov-2026 los trades no se asignan a cuentas: cada trade solo indica si se hizo en evaluación o en fondeada. Un trade tomado en varias cuentas se apunta una vez, con el riesgo y P&L sumados.)');
   if(costs.length){ L.push('Costes: '+costs.map(c=>`${c.date} ${c.concept||c.firm||''} ${fmt$(c.amount)}`).join(' | ')); }
   if(payouts.length){ L.push('Payouts: '+payouts.map(p=>`${p.date} ${p.concept||p.firm||''} ${fmt$(p.amount)}`).join(' | ')); }
   line();
